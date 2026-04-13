@@ -14,9 +14,21 @@ fn conf() -> Conf {
     }
 }
 
+fn color_from(hex: u32) -> Color {
+    let r = ((hex >> 16) & 0xFF) as f32 / 255.0;
+    let g = ((hex >> 8) & 0xFF) as f32 / 255.0;
+    let b = (hex & 0xFF) as f32 / 255.0;
+    let output = Color::new(r, g, b, 1.0);
+    return output;
+}
+
 #[macroquad::main(conf)]
 async fn main() {
+    let sky_color = color_from(0x87CEEB);
+    let _delta = get_frame_time();
     let rust_logo = load_texture("OIP (1).png").await.unwrap();
+    let plane_texture = load_texture("Plane.png").await.unwrap();
+    let grass_texture = load_texture("Grass.png").await.unwrap();
     let mut x = 0.0;
     let mut switch = false;
     let bounds = 8.0;
@@ -35,6 +47,8 @@ async fn main() {
     let mut up = right.cross(front).normalize();
 
     let mut position = vec3(0.0, 1.0, 0.0);
+    let mut is_jumping = false;
+    let mut jump_velocity = 0.0;
     let mut last_mouse_position: Vec2 = mouse_position().into();
 
     let mut grabbed = true;
@@ -77,8 +91,27 @@ async fn main() {
         if is_key_down(KeyCode::D) {
             position += right * MOVE_SPEED;
         }
+        if is_key_pressed(KeyCode::Space) && !is_jumping {
+            is_jumping = true;
+            jump_velocity = 0.25;
+        }
         if is_mouse_button_down(MouseButton::Left) {
             println!("Left mouse button is down!");
+        }
+        if is_key_down(KeyCode::LeftShift) {
+            position += front * MOVE_SPEED * 1.5;
+        }
+        if is_key_down(KeyCode::LeftControl) {
+            position -= front * MOVE_SPEED * 0.5;
+            position.y = 0.5;
+        }
+        if is_jumping {
+            position.y += jump_velocity;
+            jump_velocity -= 0.01;
+            if position.y <= 1.0 {
+                position.y = 1.0;
+                is_jumping = false;
+            }
         }
         let mouse_position: Vec2 = mouse_position().into();
         let mouse_delta = mouse_position - last_mouse_position;
@@ -105,8 +138,13 @@ async fn main() {
                 switch = !switch;
             }
         }
-
-        clear_background(LIGHTGRAY);
+        if position.y <= 1.0 && !is_key_down(KeyCode::LeftControl) {
+            position.y = 1.0;
+        }
+        if !is_jumping && !is_key_down(KeyCode::LeftControl) {
+            position.y = 1.0;
+        }
+        clear_background(sky_color);
         // Going 3d!
 
         set_camera(&Camera3D {
@@ -125,6 +163,7 @@ async fn main() {
         draw_cube(vec3(0., 1., -6.), vec3(2., 2., 2.), Some(&rust_logo), GREEN);
         draw_cube(vec3(0., 1., 6.), vec3(2., 2., 2.), Some(&rust_logo), BLUE);
         draw_cube(vec3(2., 1., 2.), vec3(2., 2., 2.), Some(&rust_logo), RED);
+        draw_plane(vec3(-8., 0., -8.), vec2(25., 25.), Some(&grass_texture), GREEN);
 
         // Back to screen space, render some text
 
@@ -145,25 +184,6 @@ async fn main() {
             30.0,
             BLACK,
         );
-        if is_key_down(KeyCode::Space) {
-            let mut going_up = true;
-            while going_up {
-                let mut up_movement = 0.0;
-                while up_movement <= 1.0 {
-                    up_movement += 0.1;
-                    position.y = 1.0 + up_movement;
-                    next_frame().await;
-                }
-                while up_movement == 1.0 {
-                    up_movement -= 0.1;
-                    position.y = 1.0 + up_movement;
-                    next_frame().await;
-                    if up_movement <= 0.0 {
-                        going_up = false;
-                    }
-                }
-            }
-        }
         next_frame().await
     }
 }
