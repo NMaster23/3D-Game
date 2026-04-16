@@ -24,9 +24,10 @@ fn color_from(hex: u32) -> Color {
 
 #[macroquad::main(conf)]
 async fn main() {
+    set_pc_assets_folder("assets");
     let sky_color = color_from(0x87CEEB);
     let _delta = get_frame_time();
-    let rust_logo = load_texture("OIP (1).png").await.unwrap();
+    let rust_logo = load_texture("Placeholder.png").await.unwrap();
     let plane_texture = load_texture("Plane.png").await.unwrap();
     let grass_texture = load_texture("Grass.png").await.unwrap();
     let mut x = 0.0;
