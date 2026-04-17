@@ -1,190 +1,88 @@
-use macroquad::prelude::*;
-// use glam::vec3;
+use bevy::prelude::*;
 
-const MOVE_SPEED: f32 = 0.1;
-const LOOK_SPEED: f32 = 0.1;
+#[derive(Component)]
+struct PlayerData {
+    health: i32,
+    x: f32,
+    y: f32,
+    z: f32,
+    player_name: String
+}
 
-fn conf() -> Conf {
-    Conf {
-        window_title: String::from("Macroquad"),
-        window_width: 1260,
-        window_height: 768,
-        fullscreen: false,
-        ..Default::default()
+fn spawn_player(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let player = PlayerData {
+        health: 100,
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        player_name: String::from("Player1")
+    };
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        MeshMaterial3d(materials.add(Color::srgb_u8(200, 50, 50))),
+        PlayerData {
+            health: 100,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            player_name: "Player1".into(),
+        },
+        Transform::from_xyz(player.x, player.y, player.z),
+    ));
+    println!("Spawned player: {} with health: {} at X: {} Y: {} Z: {}", player.player_name, player.health, player.x, player.y, player.z);
+}
+
+fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut player_pos: ) {
+    if keyboard_input.pressed(KeyCode::KeyW) {
+        player.y += 0.1;
+    }
+    if keyboard_input.pressed(KeyCode::KeyS) {
+        player.y -= 0.1;
+    }
+    if keyboard_input.pressed(KeyCode::KeyA) {
+        player.x -= 0.1;
+    }
+    if keyboard_input.pressed(KeyCode::KeyD) {
+        player.x += 0.1;
     }
 }
 
-fn color_from(hex: u32) -> Color {
-    let r = ((hex >> 16) & 0xFF) as f32 / 255.0;
-    let g = ((hex >> 8) & 0xFF) as f32 / 255.0;
-    let b = (hex & 0xFF) as f32 / 255.0;
-    let output = Color::new(r, g, b, 1.0);
-    return output;
+fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    // circular base
+    commands.spawn((
+        Mesh3d(meshes.add(Circle::new(4.0))),
+        MeshMaterial3d(materials.add(Color::WHITE)),
+        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+    ));
+    // cube
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
+        Transform::from_xyz(0.0, 0.5, 0.0),
+    ));
+    // light
+    commands.spawn((
+        PointLight {
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(4.0, 8.0, 4.0),
+    ));
+    // camera
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
 }
 
-#[macroquad::main(conf)]
-async fn main() {
-    set_pc_assets_folder("assets");
-    let sky_color = color_from(0x87CEEB);
-    let _delta = get_frame_time();
-    let rust_logo = load_texture("Placeholder.png").await.unwrap();
-    let plane_texture = load_texture("Plane.png").await.unwrap();
-    let grass_texture = load_texture("Grass.png").await.unwrap();
-    let mut x = 0.0;
-    let mut switch = false;
-    let bounds = 8.0;
-
-    let world_up = vec3(0.0, 1.0, 0.0);
-    let mut yaw: f32 = 1.18;
-    let mut pitch: f32 = 0.0;
-
-    let mut front = vec3(
-        yaw.cos() * pitch.cos(),
-        pitch.sin(),
-        yaw.sin() * pitch.cos(),
-    )
-    .normalize();
-    let mut right = front.cross(world_up).normalize();
-    let mut up = right.cross(front).normalize();
-
-    let mut position = vec3(0.0, 1.0, 0.0);
-    let mut is_jumping = false;
-    let mut jump_velocity = 0.0;
-    let mut last_mouse_position: Vec2 = mouse_position().into();
-
-    let mut grabbed = true;
-    set_cursor_grab(grabbed);
-    show_mouse(false);
-
-    loop {
-        let delta = get_frame_time();
-
-        if is_key_pressed(KeyCode::Escape) {
-            break;
-        }
-        if is_key_pressed(KeyCode::Tab) {
-            grabbed = !grabbed;
-            set_cursor_grab(grabbed);
-            show_mouse(!grabbed);
-        }
-
-        if is_key_down(KeyCode::Up) {
-            position += front * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::Down) {
-            position -= front * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::Left) {
-            position -= right * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::Right) {
-            position += right * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::W) {
-            position += front * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::S) {
-            position -= front * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::A) {
-            position -= right * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::D) {
-            position += right * MOVE_SPEED;
-        }
-        if is_key_pressed(KeyCode::Space) && !is_jumping {
-            is_jumping = true;
-            jump_velocity = 0.25;
-        }
-        if is_mouse_button_down(MouseButton::Left) {
-            println!("Left mouse button is down!");
-        }
-        if is_key_down(KeyCode::LeftShift) {
-            position += front * MOVE_SPEED * 1.5;
-        }
-        if is_key_down(KeyCode::LeftControl) {
-            position -= front * MOVE_SPEED * 0.5;
-            position.y = 0.5;
-        }
-        if is_jumping {
-            position.y += jump_velocity;
-            jump_velocity -= 0.01;
-            if position.y <= 1.0 {
-                position.y = 1.0;
-                is_jumping = false;
-            }
-        }
-        let mouse_position: Vec2 = mouse_position().into();
-        let mouse_delta = mouse_position - last_mouse_position;
-
-        last_mouse_position = mouse_position;
-        if grabbed {
-            yaw += mouse_delta.x * delta * LOOK_SPEED;
-            pitch += mouse_delta.y * delta * -LOOK_SPEED;
-
-            pitch = if pitch > 1.5 { 1.5 } else { pitch };
-            pitch = if pitch < -1.5 { -1.5 } else { pitch };
-
-            front = vec3(
-                yaw.cos() * pitch.cos(),
-                pitch.sin(),
-                yaw.sin() * pitch.cos(),
-            )
-            .normalize();
-            right = front.cross(world_up).normalize();
-            up = right.cross(front).normalize();
-
-            x += if switch { 0.04 } else { -0.04 };
-            if x >= bounds || x <= -bounds {
-                switch = !switch;
-            }
-        }
-        if position.y <= 1.0 && !is_key_down(KeyCode::LeftControl) {
-            position.y = 1.0;
-        }
-        if !is_jumping && !is_key_down(KeyCode::LeftControl) {
-            position.y = 1.0;
-        }
-        clear_background(sky_color);
-        // Going 3d!
-
-        set_camera(&Camera3D {
-            position: position,
-            up: up,
-            target: position + front,
-            ..Default::default()
-        });
-
-
-        draw_line_3d(
-            vec3(x, 0.0, x),
-            vec3(5.0, 5.0, 5.0),
-            Color::new(1.0, 1.0, 0.0, 1.0),
-        );
-        draw_cube(vec3(0., 1., -6.), vec3(2., 2., 2.), Some(&rust_logo), GREEN);
-        draw_cube(vec3(0., 1., 6.), vec3(2., 2., 2.), Some(&rust_logo), BLUE);
-        draw_cube(vec3(2., 1., 2.), vec3(2., 2., 2.), Some(&rust_logo), RED);
-        draw_plane(vec3(-8., 0., -8.), vec2(25., 25.), Some(&grass_texture), GREEN);
-
-        // Back to screen space, render some text
-
-        set_default_camera();
-        draw_text("First Person Camera", 10.0, 20.0, 30.0, BLACK);
-
-        draw_text(
-            format!("X: {} Y: {} Z: {}", position.x, position.y, position.z).as_str(),
-            10.0,
-            48.0 + 18.0,
-            30.0,
-            BLACK,
-        );
-        draw_text(
-            format!("Press <TAB> to toggle mouse grab: {grabbed}").as_str(),
-            10.0,
-            48.0 + 42.0,
-            30.0,
-            BLACK,
-        );
-        next_frame().await
-    }
+fn main() {
+        App::new()
+        .add_plugins(DefaultPlugins)
+        .add_systems(Startup, (spawn_player, setup))
+//        .add_systems(Update, systems)
+        .run();
 }
