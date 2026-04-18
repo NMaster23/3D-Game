@@ -1,49 +1,65 @@
 use bevy::prelude::*;
+use avian3d::prelude::*;
 
 #[derive(Component)]
 struct PlayerData {
     health: i32,
-    x: f32,
-    y: f32,
-    z: f32,
-    player_name: String
+    player_name: String,
+    player_id: u32,
 }
 
 fn spawn_player(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let player = PlayerData {
         health: 100,
-        x: 0.0,
-        y: 0.0,
-        z: 0.0,
-        player_name: String::from("Player1")
+        player_name: String::from("Player1"),
+        player_id: 1,
     };
     commands.spawn((
+        RigidBody::Dynamic,
+        Collider::cuboid(1.0, 1.0, 1.0),
         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
         MeshMaterial3d(materials.add(Color::srgb_u8(200, 50, 50))),
+        AngularVelocity(Vec3::new(2.5, 3.5, 1.5)),
         PlayerData {
             health: 100,
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-            player_name: "Player1".into(),
+            player_name: "Admin".into(),
+            player_id: 1,
         },
-        Transform::from_xyz(player.x, player.y, player.z),
     ));
-    println!("Spawned player: {} with health: {} at X: {} Y: {} Z: {}", player.player_name, player.health, player.x, player.y, player.z);
 }
 
-fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut player_pos: ) {
-    if keyboard_input.pressed(KeyCode::KeyW) {
-        player.y += 0.1;
-    }
-    if keyboard_input.pressed(KeyCode::KeyS) {
-        player.y -= 0.1;
-    }
-    if keyboard_input.pressed(KeyCode::KeyA) {
-        player.x -= 0.1;
-    }
-    if keyboard_input.pressed(KeyCode::KeyD) {
-        player.x += 0.1;
+fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&mut LinearVelocity, &mut PlayerData)>) {
+    for (mut linear_velocity, mut player) in query.iter_mut() {
+        let mut move_direction = Vec3::ZERO;
+        if keyboard_input.pressed(KeyCode::KeyW) && player.health > 0 {
+            move_direction.z -= 0.1;
+        }
+        if keyboard_input.pressed(KeyCode::KeyS) && player.health > 0 {
+            move_direction.z += 0.1;
+        }
+        if keyboard_input.pressed(KeyCode::KeyA) && player.health > 0 {
+            move_direction.x -= 0.1;
+        }
+        if keyboard_input.pressed(KeyCode::KeyD) && player.health > 0 {
+            move_direction.x += 0.1;
+        }
+        if keyboard_input.pressed(KeyCode::Space) && player.health > 0 {
+            move_direction.y += 0.1;
+        }
+        if keyboard_input.pressed(KeyCode::ArrowUp) && player.health > 0 {
+            move_direction.z -= 0.1;
+        }
+        if keyboard_input.pressed(KeyCode::ArrowDown) && player.health > 0 {
+            move_direction.z += 0.1;
+        }
+        if keyboard_input.pressed(KeyCode::ArrowLeft) && player.health > 0 {
+            move_direction.x -= 0.1;
+        }
+        if keyboard_input.pressed(KeyCode::ArrowRight) && player.health > 0 {
+            move_direction.x += 0.1;
+        }
+        
+        linear_velocity.0 = move_direction;
     }
 }
 
@@ -54,15 +70,10 @@ fn setup(
 ) {
     // circular base
     commands.spawn((
+        RigidBody::Static,
+        Collider::cylinder(4.0, 0.1),
         Mesh3d(meshes.add(Circle::new(4.0))),
         MeshMaterial3d(materials.add(Color::WHITE)),
-        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-    ));
-    // cube
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
-        Transform::from_xyz(0.0, 0.5, 0.0),
     ));
     // light
     commands.spawn((
@@ -81,8 +92,8 @@ fn setup(
 
 fn main() {
         App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins((DefaultPlugins, PhysicsPlugins::default()))
         .add_systems(Startup, (spawn_player, setup))
-//        .add_systems(Update, systems)
+        .add_systems(Update, player_movement)
         .run();
 }
