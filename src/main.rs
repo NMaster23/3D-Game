@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use avian3d::prelude::*;
+use std::time::Duration;
 
 #[derive(Component)]
 struct Player;
@@ -11,12 +12,21 @@ pub struct PlayerData {
     player_id: u32,
 }
 
-fn spawn_player(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_server: Res<AssetServer>) {
-    let player = PlayerData {
-        health: 100,
-        player_name: String::from("Player1"),
-        player_id: 1,
-    };
+#[derive(Resource)]
+struct Animations {
+    animations: Vec<AnimationNodeIndex>,
+    graph_handle: Handle<AnimationGraph>,
+}
+
+fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut graphs: ResMut<Assets<AnimationGraph>>,) {
+    let (graph, node_indices) = AnimationGraph::from_clips([
+        asset_server.load(GltfAssetLabel::Animation(0).from_asset("Player\\player.glb")),
+    ]);
+    let graph_handle = graphs.add(graph);
+    commands.insert_resource(Animations {
+        animations: node_indices,
+        graph_handle,
+    });
     commands.spawn((
         RigidBody::Dynamic,
         Collider::cuboid(1.0, 1.0, 1.0),
@@ -28,6 +38,48 @@ fn spawn_player(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_
             player_id: 1,
         },
     ));
+}
+
+fn setup_scene_once_loaded(
+    mut commands: Commands,
+    animations: Res<Animations>,
+    mut players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
+) {
+    for (entity, mut player) in &mut players {
+        let mut transitions = AnimationTransitions::new();
+        // directly via the `AnimationPlayer`.
+        transitions
+            .play(&mut player, animations.animations[0], Duration::ZERO)
+            .repeat();
+
+        commands
+            .entity(entity)
+            .insert(AnimationGraphHandle(animations.graph_handle.clone()))
+            .insert(transitions);
+    }
+}
+
+fn movement_animations(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut animation_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+    animations: Res<Animations>,
+    mut current_animation: Local<usize>,
+) {
+    for (mut player, mut transitions) in &mut animation_players {
+        let Some((&playing_animation_index, _)) = player.playing_animations().next() else {
+            continue;
+        };
+
+        if keyboard_input.pressed(KeyCode::KeyW) {
+            let playing_animation = player.animation_mut(playing_animation_index).unwrap();
+            if playing_animation.is_paused() {
+                let _ = playing_animation.speed() == 0.5;
+                playing_animation.resume();
+            } else {
+                playing_animation.pause();
+            }
+        }
+    }
 }
 
 fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&mut LinearVelocity, &mut PlayerData)>) {
@@ -101,24 +153,11 @@ fn setup(
     
 }
 
-fn lock_camera(query: Query<(&Transform, &PlayerData), With<Player>>, mut camera_query: Query<&mut Transform, (With<Camera3d>, Without<Player>)>) {
-    if let Ok((player_transform, _)) = query.single() {
-        for mut camera_transform in camera_query.iter_mut() {
-            *camera_transform = Transform::from_xyz(
-                player_transform.translation.x - 2.5,
-                player_transform.translation.y + 4.5,
-                player_transform.translation.z + 9.0,
-            ).looking_at(player_transform.translation, Vec3::Y);
-        }
-    }
-}
-
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, PhysicsPlugins::default()))
-        //.add_plugins(VoxelWorldPlugin::with_config(MyWorld))
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0)))
         .add_systems(Startup, (spawn_player, setup))
-        .add_systems(Update, (player_movement, lock_camera))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations))
         .run();
 }
