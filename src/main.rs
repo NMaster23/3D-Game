@@ -93,16 +93,16 @@ fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(
     for (mut linear_velocity, player) in query.iter_mut() {
         let mut move_direction = Vec3::ZERO;
         if keyboard_input.pressed(KeyCode::KeyW) && player.health > 0 {
-            move_direction.z -= 1.0;
-        }
-        if keyboard_input.pressed(KeyCode::KeyS) && player.health > 0 {
             move_direction.z += 1.0;
         }
+        if keyboard_input.pressed(KeyCode::KeyS) && player.health > 0 {
+            move_direction.z -= 1.0;
+        }
         if keyboard_input.pressed(KeyCode::KeyA) && player.health > 0 {
-            move_direction.x -= 1.0;
+            move_direction.x += 1.0;
         }
         if keyboard_input.pressed(KeyCode::KeyD) && player.health > 0 {
-            move_direction.x += 1.0;
+            move_direction.x -= 1.0;
         }
         if keyboard_input.just_pressed(KeyCode::Space) && player.health > 0 {
             linear_velocity.y = 10.0;
@@ -126,32 +126,46 @@ fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(
     }
 }
 
-fn camera_positioning(relative_cursor_position: Single<&RelativeCursorPosition>, mut player_data: Query<&mut Transform, With<Player>>, mut camera_data: Query<&mut Transform, (With<Camera3d>, Without<Player>)>) {
-    let Ok(mut player_transform) = player_data.single_mut() else {
+fn camera_positioning(mouse_button: Res<ButtonInput<MouseButton>>, relative_cursor_position: Single<&RelativeCursorPosition>, player_data: Query<&Transform, With<Player>>, mut camera_data: Query<&mut Transform, (With<Camera3d>, Without<Player>)>) {
+    let Ok(player_transform) = player_data.single() else {
         return;
     };
     let Ok(mut camera_transform) = camera_data.single_mut() else {
         return;
     };
-    let (yaw, _pitch, _roll) = player_transform.rotation.to_euler(EulerRot::YXZ);
-    let yaw = (yaw * 1000.0).round() / 1000.0;
+    
+    let camera_distance = 12.0;
+    let camera_height_offset = 6.0;
+    let player_height = 1.0;
+    let focus_offset_y = player_height * 0.5;
+    
     if let Some(mouse_pos) = relative_cursor_position.normalized {
-        let yaw = (mouse_pos.x - 0.5) * -std::f32::consts::PI * 2.0;
-        let pitch = (mouse_pos.y - 0.5) * std::f32::consts::PI;
-        let camera_height_offset = 5.0;
-        let distance_from_player = 5.0;
-        let camera_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-        let offset = camera_rotation * Vec3::new(0.0, camera_height_offset, distance_from_player);
-        camera_transform.translation = player_transform.translation + offset;
-        let target_focus = player_transform.translation + Vec3::new(0.0, 1.8, 0.0);
-        camera_transform.look_at(target_focus, Vec3::Y);
+        if mouse_button.pressed(MouseButton::Middle) {
+            let yaw = (mouse_pos.x - 0.5) * std::f32::consts::PI * 2.0;
+            let raw_pitch = (mouse_pos.y - 0.5) * std::f32::consts::PI * 0.4;
+            let pitch = raw_pitch.clamp(-std::f32::consts::PI * 0.2, std::f32::consts::PI * 0.25);
+            let horizontal_distance = camera_distance * pitch.cos();
+            let vertical_distance = camera_distance * pitch.sin();
+            let offset_x = horizontal_distance * yaw.sin();
+            let offset_z = horizontal_distance * yaw.cos();
+            let offset_y = vertical_distance + camera_height_offset;
+            camera_transform.translation = player_transform.translation + Vec3::new(offset_x, offset_y, offset_z);
+            let focus_point = player_transform.translation + Vec3::new(0.0, focus_offset_y, 0.0);
+            camera_transform.look_at(focus_point, Vec3::Y);
+        }
+        else {
+            let yaw = std::f32::consts::PI;
+            let pitch = std::f32::consts::PI * 0.15;
+            let horizontal_distance = camera_distance * pitch.cos();
+            let vertical_distance = camera_distance * pitch.sin();
+            let offset_x = horizontal_distance * yaw.sin();
+            let offset_z = horizontal_distance * yaw.cos();
+            let offset_y = vertical_distance + camera_height_offset;
+            camera_transform.translation = player_transform.translation + Vec3::new(offset_x, offset_y, offset_z);
+            let focus_point = player_transform.translation + Vec3::new(0.0, focus_offset_y, 0.0);
+            camera_transform.look_at(focus_point, Vec3::Y);
+        }
     }
-    else {
-        return;
-    };
-    let offset = Vec3::new(0.0, 5.0, -5.0);
-    camera_transform.translation = player_transform.translation + Quat::from_rotation_y(yaw) * offset;
-    camera_transform.look_at(player_transform.translation, Vec3::Y);
 }
 
 fn setup(
