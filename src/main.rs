@@ -1,4 +1,4 @@
-use bevy::{prelude::*, ui::RelativeCursorPosition};
+use bevy::{prelude::*, ui::RelativeCursorPosition, post_process::bloom::Bloom};
 use avian3d::prelude::*;
 use std::time::Duration;
 
@@ -184,31 +184,51 @@ fn setup(
     // circular base
     commands.spawn((
         RigidBody::Static,
-        Mesh3d(meshes.add(Cylinder::new(10.0, 0.5))),
-        Collider::cylinder(10.0, 0.5),
+        Mesh3d(meshes.add(Cylinder::new(100.0, 0.5))),
+        Collider::cylinder(100.0, 0.2),
         MeshMaterial3d(materials.add(Color::BLACK)),
     ));
-    // light
-    commands.spawn((
-        PointLight {
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(4.0, 8.0, 4.0),
-    ));
+    let material_emissive1 = materials.add(StandardMaterial {
+        emissive: LinearRgba::rgb(0.0, 0.0, 150.0),
+        ..default()
+    });
+    let mesh = meshes.add(Sphere::new(0.4).mesh().ico(5).unwrap());
     // camera
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Bloom::NATURAL,
     ));
-    
+
+    commands.spawn((
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(material_emissive1),
+    ));
+}
+
+pub fn setup_lighting(mut commands: Commands, camera: Single<(Entity, Option<&mut Bloom>), With<Camera>>, keycode: Res<ButtonInput<KeyCode>>) {
+    let bloom = camera.into_inner();
+    match bloom {
+        (entity, Some(mut bloom)) => {
+            if keycode.just_pressed(KeyCode::KeyQ) {
+                bloom.intensity = 1.0;
+                commands.entity(entity).insert(Bloom::NATURAL);
+            }
+        }
+        (entity, None) => {
+            if keycode.just_pressed(KeyCode::KeyQ) {
+                commands.entity(entity).insert(Bloom::NATURAL);
+            }
+        }
+    }
 }
 
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, PhysicsPlugins::default()))
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0)))
+        .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_player, setup))
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting))
         .run();
 }
