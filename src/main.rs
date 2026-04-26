@@ -8,6 +8,9 @@ use avian3d::math::PI;
 pub struct Lighting;
 
 #[derive(Component)]
+struct Crosshair;
+
+#[derive(Component)]
 struct Bots;
 
 #[derive(Component)]
@@ -60,7 +63,6 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         graph_handle,
     });
     commands.spawn((
-        Transform::default(),
         GlobalTransform::default(),
         Player,
         RigidBody::Dynamic,
@@ -231,23 +233,28 @@ fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(
     }
 }
 
-fn camera_positioning(mouse_movement: Res<AccumulatedMouseMotion>, relative_cursor_position: Single<&RelativeCursorPosition>, mut player_data: Query<&mut Transform, With<Player>>, mut camera_data: Query<&mut Transform, (With<Camera3d>, Without<Player>)>, mut rotation: Local<Vec2>) {
+fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshair_offset: Local<Vec2>, mouse_button: Res<ButtonInput<MouseButton>>, mouse_movement: Res<AccumulatedMouseMotion>, mut player_data: Query<&mut Transform, With<Player>>, mut camera_data: Query<&mut Transform, (With<Camera3d>, Without<Player>)>, mut rotation: Local<Vec2>) {
     let Ok(mut player_transform) = player_data.single_mut() else {
         return;
     };
     let Ok(mut camera_transform) = camera_data.single_mut() else {
         return;
     };
-    
-    let camera_distance = 6.0;
+    let camera_distance = 10.0;
     let camera_height_offset = 1.0;
-    let player_height = 2.0;
     let focus_offset_y = 1.5;
-    let focus_distance = 5.0;
+    let focus_distance = 2.0;
     let sens = 0.1;
     rotation.x += mouse_movement.delta.x * sens;
     rotation.y += mouse_movement.delta.y * sens;
-    rotation.y = rotation.y.clamp(-1.2, 1.2);
+    rotation.y = rotation.y.clamp(-89.9, 89.9);
+    *crosshair_offset += mouse_movement.delta * 0.5;
+    *crosshair_offset = crosshair_offset.lerp(Vec2::ZERO, 0.1);
+    *crosshair_offset = crosshair_offset.clamp(Vec2::splat(-150.0), Vec2::splat(150.0));
+    if let Ok(mut node) = query.single_mut() {
+        node.left = Val::Px(crosshair_offset.x);
+        node.top = Val::Px(crosshair_offset.y);
+    }
     let yaw = rotation.x.to_radians();
     let pitch = rotation.y.to_radians();
     let horizontal_distance = camera_distance * pitch.cos();
@@ -255,11 +262,33 @@ fn camera_positioning(mouse_movement: Res<AccumulatedMouseMotion>, relative_curs
     let offset_x = -horizontal_distance * yaw.sin();
     let offset_z = -horizontal_distance * yaw.cos();
     let offset_y = vertical_distance + camera_height_offset;
-    let forward_direction = Vec3::new(yaw.sin(), 0.0, yaw.cos());
     camera_transform.translation = player_transform.translation + Vec3::new(offset_x, offset_y, offset_z);
+    let forward_direction = Vec3::new(yaw.sin(), 0.0, yaw.cos());
     let focus_point = player_transform.translation + Vec3::new(0.0, focus_offset_y, 0.0) + forward_direction * focus_distance;
     camera_transform.look_at(focus_point, Vec3::Y);
     player_transform.rotation = Quat::from_rotation_y(yaw);
+    if mouse_button.pressed(MouseButton::Middle) {
+        let camera_distance = 10.0;
+        let camera_height_offset = 1.0;
+        let focus_offset_y = 1.5;
+        let focus_distance = 2.0;
+        let sens = 0.1;
+        rotation.x += mouse_movement.delta.x * sens;
+        rotation.y += mouse_movement.delta.y * sens;
+        rotation.y = rotation.y.clamp(-89.9, 89.9);
+        let yaw = rotation.x.to_radians();
+        let pitch = rotation.y.to_radians();
+        let horizontal_distance = camera_distance * pitch.cos();
+        let vertical_distance = camera_distance * pitch.sin();
+        let offset_x = horizontal_distance * yaw.sin();
+        let offset_z = -horizontal_distance * yaw.cos();
+        let offset_y = vertical_distance + camera_height_offset;
+        let forward_direction = Vec3::new(yaw.sin(), 0.0, yaw.cos());
+        camera_transform.translation = player_transform.translation + Vec3::new(offset_x, offset_y, offset_z);
+        let focus_point = player_transform.translation + Vec3::new(0.0, focus_offset_y, 0.0) + forward_direction * focus_distance;
+        camera_transform.look_at(focus_point, Vec3::Y);
+        player_transform.rotation = Quat::from_rotation_y(yaw);
+    }
 }
 
 fn setup(
@@ -285,6 +314,7 @@ fn setup(
                 height: Val::Px(24.0),
                 ..default()
             },
+            Crosshair,
         ));
     });
     commands.spawn((
