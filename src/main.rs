@@ -1,4 +1,5 @@
-use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::WindowResolution};
+use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::WindowResolution, window::{CursorGrabMode, CursorOptions}};
+use bevy::input::mouse::AccumulatedMouseMotion;
 use avian3d::prelude::*;
 use std::time::Duration;
 use avian3d::math::PI;
@@ -38,6 +39,17 @@ struct Animations {
     graph_handle: Handle<AnimationGraph>,
 }
 
+fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>) {
+    if mouse.just_pressed(MouseButton::Left) {
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
+    }
+    if keycode.just_pressed(KeyCode::Escape) {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    }
+}
+
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut graphs: ResMut<Assets<AnimationGraph>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let (graph, node_indices) = AnimationGraph::from_clips([
         asset_server.load(GltfAssetLabel::Animation(0).from_asset("Player\\Player.glb")),
@@ -54,6 +66,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         RigidBody::Dynamic,
         Collider::cuboid(1.0, 3.0, 1.0),
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"))),
+        Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
             health: 100,
             player_name: "Admin".into(),
@@ -110,7 +123,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
                 bot_quantity: bots.bot_quantity,
                 bot_offset: i as f32 * 2.0 - (bots.bot_quantity as f32 - 1.0) * 2.0 / 2.0,
             },
-            Transform::from_xyz(bots.bot_offset, 0.0, -5.0),
+            Transform::from_xyz(bots.bot_offset, 10.0, -5.0),
             CharacterController {
                 move_direction: Vec3::ZERO,
             },
@@ -131,7 +144,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
                 color: Color::WHITE,
                 ..default()
             },
-            Transform::from_xyz(0.0, 3.0, 0.0).looking_at(Vec3::new(0.0, 3.0, 10.0), Vec3::Y),
+            Transform::from_xyz(0.0, 10.0, 0.0).looking_at(Vec3::new(0.0, 3.0, 10.0), Vec3::Y),
         ));
     });
     }
@@ -218,7 +231,7 @@ fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(
     }
 }
 
-fn camera_positioning(relative_cursor_position: Single<&RelativeCursorPosition>, mut player_data: Query<&mut Transform, With<Player>>, mut camera_data: Query<&mut Transform, (With<Camera3d>, Without<Player>)>) {
+fn camera_positioning(mouse_movement: Res<AccumulatedMouseMotion>, relative_cursor_position: Single<&RelativeCursorPosition>, mut player_data: Query<&mut Transform, With<Player>>, mut camera_data: Query<&mut Transform, (With<Camera3d>, Without<Player>)>, mut rotation: Local<Vec2>) {
     let Ok(mut player_transform) = player_data.single_mut() else {
         return;
     };
@@ -226,42 +239,54 @@ fn camera_positioning(relative_cursor_position: Single<&RelativeCursorPosition>,
         return;
     };
     
-    let camera_distance = 2.0;
-    let camera_height_offset = 4.0;
+    let camera_distance = 6.0;
+    let camera_height_offset = 1.0;
     let player_height = 2.0;
-    let focus_offset_y = player_height * 0.5;
-    let focus_distance = 2.0;
-    
-    if let Some(mouse_pos) = relative_cursor_position.normalized {
-        let yaw = (mouse_pos.x - 0.5) * std::f32::consts::PI * 2.0;
-        let raw_pitch = ((mouse_pos.y - 0.5) * std::f32::consts::PI * 0.4) + std::f32::consts::FRAC_PI_4;
-        let pitch = raw_pitch.clamp(-std::f32::consts::PI * 0.2, std::f32::consts::PI * 0.25);
-        let horizontal_distance = camera_distance * pitch.cos();
-        let vertical_distance = camera_distance * pitch.sin();
-        let offset_x = -horizontal_distance * yaw.sin();
-        let offset_z = -horizontal_distance * yaw.cos();
-        let offset_y = vertical_distance + camera_height_offset + 2.0;
-        let forward_direction = Vec3::new(yaw.sin(), 0.0, yaw.cos());
-        camera_transform.translation = player_transform.translation + Vec3::new(offset_x, offset_y, offset_z);
-        let focus_point = player_transform.translation + Vec3::new(0.0, focus_offset_y, 0.0) + forward_direction * focus_distance;
-        camera_transform.look_at(focus_point, Vec3::Y);
-        player_transform.rotation = Quat::from_rotation_y(yaw);
-    }
+    let focus_offset_y = 1.5;
+    let focus_distance = 5.0;
+    let sens = 0.1;
+    rotation.x += mouse_movement.delta.x * sens;
+    rotation.y += mouse_movement.delta.y * sens;
+    rotation.y = rotation.y.clamp(-1.2, 1.2);
+    let yaw = rotation.x.to_radians();
+    let pitch = rotation.y.to_radians();
+    let horizontal_distance = camera_distance * pitch.cos();
+    let vertical_distance = camera_distance * pitch.sin();
+    let offset_x = -horizontal_distance * yaw.sin();
+    let offset_z = -horizontal_distance * yaw.cos();
+    let offset_y = vertical_distance + camera_height_offset;
+    let forward_direction = Vec3::new(yaw.sin(), 0.0, yaw.cos());
+    camera_transform.translation = player_transform.translation + Vec3::new(offset_x, offset_y, offset_z);
+    let focus_point = player_transform.translation + Vec3::new(0.0, focus_offset_y, 0.0) + forward_direction * focus_distance;
+    camera_transform.look_at(focus_point, Vec3::Y);
+    player_transform.rotation = Quat::from_rotation_y(yaw);
 }
 
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     commands.spawn((
         Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
             ..default()
         },
         RelativeCursorPosition::default(),
-    ));
+    )).with_children(|parent| {
+        parent.spawn((
+            ImageNode::new(asset_server.load("crosshair.png")),
+            Node {
+                width: Val::Px(24.0),
+                height: Val::Px(24.0),
+                ..default()
+            },
+        ));
+    });
     commands.spawn((
         RigidBody::Static,
         Mesh3d(meshes.add(Cuboid::new(100.0, 0.25, 100.0))),
@@ -302,6 +327,6 @@ fn main() {
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, bot_spawn)
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling))
         .run();
 }
