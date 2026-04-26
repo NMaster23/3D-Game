@@ -1,11 +1,9 @@
-use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::WindowResolution, window::{CursorGrabMode, CursorOptions}, picking::backend::ray::RayMap};
+use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::WindowResolution, window::{CursorGrabMode, CursorOptions}};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use avian3d::prelude::*;
 use std::time::Duration;
 use avian3d::math::PI;
 use rand::prelude::*;
-
-const LASER_SPEED: f32 = 0.03;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -18,6 +16,11 @@ struct Bots;
 
 #[derive(Component)]
 struct HealthBarUI;
+
+#[derive(Component)]
+pub struct Hiding {
+    is_hidden: bool,
+}
 
 #[derive(Component)]
 struct BotData {
@@ -83,7 +86,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"))),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
-            health: 5,
+            health: 10,
             player_name: "Admin".into(),
             player_id: 1,
         },
@@ -115,28 +118,19 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         ));
         parent.spawn((
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Gun\\Gun.glb"))),
-            Transform::from_xyz(1.5, 2.0, 1.0),
+            Transform {
+                translation: Vec3::new(1.5, 2.0, 1.0),
+                scale: Vec3::splat(0.1),
+                rotation: Quat::from_rotation_y(PI / 2.0),
+                ..default()
+            },
+            GunBarrel,
         ));
     });
 }
 
-fn bouncing_raycast(
-    mut ray_cast: MeshRayCast,
-    mut gizmos: Gizmos,
-    time: Res<Time>,
-    // The ray map stores rays cast by the cursor
-    ray_map: Res<RayMap>,
-) {
-    // Cast an automatically moving ray and bounce it off of surfaces
-    let t = ops::cos((time.elapsed_secs() - 4.0).max(0.0) * LASER_SPEED) * PI;
-    let ray_pos = Vec3::new(ops::sin(t), ops::cos(3.0 * t) * 0.5, ops::cos(t)) * 0.5;
-    let ray_dir = Dir3::new(-ray_pos).unwrap();
-    let ray = Ray3d::new(ray_pos, ray_dir);
-    gizmos.sphere(ray_pos, 0.1, Color::WHITE);
-}
-
 fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let bot_number = 1;
+    let bot_number = 5;
     let mut rng = rand::rng();
     let hits = rng.random_range(1..20);
     let hits_num = rng.random_range(1..5);
@@ -153,7 +147,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
             GlobalTransform::default(),
             Bots,
             RigidBody::Dynamic,
-            Collider::cuboid(1.0, 3.0, 1.0),
+            Collider::cuboid(3.0, 3.0, 3.0),
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"))),
             BotData {
                 health: hits,
@@ -189,18 +183,35 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
     }
 }
 
-fn bot_handling(mut query: Query<(&mut Transform, &mut CharacterController, &BotData), (With<Bots>, Without<Player>)>, mut player_data: Query<(&mut Transform, &mut PlayerData), With<Player>>, mut commands: Commands, asset_server: Res<AssetServer>) {
-    let Ok((mut player_transform, mut player_data)) = player_data.single_mut() else {
-        return;
-    };
-    for (mut transform, mut controller, bot_data) in query.iter_mut() {
-        let direction_to_player = (player_transform.translation - transform.translation).normalize_or_zero();
-        controller.move_direction = direction_to_player * 2.0;
-        transform.rotation = Quat::from_rotation_y(direction_to_player.x.atan2(direction_to_player.z));
-        let mut rng = rand::rng();
-        if rng.random_range(1..500) == bot_data.hit_number {
-            player_data.health -= 1;
+fn bot_death(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>,) {
+    for (botdata, mut transform) in query.iter_mut() {
+        if botdata.health <= 0 {
+            transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
+            transform.translation.y = 0.5;
         }
+    }
+}
+
+
+fn bot_handling(
+    time: Res<Time>,
+    mut q: Query<(Entity, &mut Transform, &mut CharacterController, &BotData), (With<Bots>, Without<Player>)>,
+    mut p: Query<(&Transform, &mut PlayerData), With<Player>>,
+) {
+    let Ok((pt, mut pd)) = p.single_mut() else { return; };
+    let pos: Vec<_> = q.iter().map(|(e, t, _, _)| (e, t.translation)).collect();
+    for (e, mut t, mut c, b) in q.iter_mut() {
+        let dir = (pt.translation - t.translation).normalize_or_zero();
+        let sep: Vec3 = pos.iter().filter(|(oe, _)| e != *oe).filter_map(|(_, ot)| {
+            let d = t.translation.distance(*ot);
+            (d > 0.0 && d < 2.0).then(|| (t.translation - *ot).normalize_or_zero() * (1.0 - d / 2.0))
+        }).sum();
+        let f_dir = (dir + sep * 1.5).normalize_or_zero();
+        c.move_direction = f_dir * 2.5;
+        if f_dir.length_squared() > 0.0 {
+            t.rotation = t.rotation.slerp(Quat::from_rotation_y(f_dir.x.atan2(f_dir.z)), time.delta_secs() * 5.0);
+        }
+        if rand::rng().random_range(1..500) == b.hit_number { pd.health -= 1; }
     }
 }
 
@@ -297,7 +308,7 @@ fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshai
     *crosshair_offset = crosshair_offset.clamp(Vec2::splat(-150.0), Vec2::splat(150.0));
     if let Ok(mut node) = query.single_mut() {
         node.left = Val::Px(crosshair_offset.x);
-        node.top = Val::Px(crosshair_offset.y);
+        node.top = Val::Px(crosshair_offset.y - 100.0);
     }
     let yaw = rotation.x.to_radians();
     let pitch = rotation.y.to_radians();
@@ -363,8 +374,8 @@ fn setup(
     });
     commands.spawn((
         RigidBody::Static,
-        Mesh3d(meshes.add(Cuboid::new(100.0, 0.25, 100.0))),
-        Collider::cuboid(100.0, 0.25, 100.0),
+        Mesh3d(meshes.add(Cuboid::new(100.0, 0.5, 100.0))),
+        Collider::cuboid(100.0, 0.1, 100.0),
         MeshMaterial3d(materials.add(Color::WHITE)),
     ));
     // camera
@@ -373,6 +384,35 @@ fn setup(
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
         Bloom::NATURAL,
     ));
+    commands.spawn(Node {
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        align_items: AlignItems::FlexEnd,
+        justify_content: JustifyContent::Center,
+        padding: UiRect::bottom(Val::Px(40.0)),
+        ..default()
+    }).with_children(|parent| {
+        parent.spawn((
+            Node {
+                width: Val::Px(400.0),
+                height: Val::Px(30.0),
+                border: UiRect::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::BLACK),
+            BorderColor::all(Color::WHITE)
+        )).with_children(|background| {
+            background.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.2, 0.8, 0.2)),
+                HealthBarUI,
+            ));
+        });
+    });
 }
 
 pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode: Res<ButtonInput<KeyCode>>) {
@@ -386,13 +426,25 @@ pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode
     }
 }
 
-fn shoot_gun(mouse: Res<ButtonInput<MouseButton>>, window: Single<&Window>, cam_q: Query<(&Camera, &GlobalTransform)>, gun_q: Query<&GlobalTransform, With<GunBarrel>>, sq: SpatialQuery, mut bots: Query<&mut BotData>, crosshair: Res<FloatingCrosshair>) {
+fn shoot_gun(mouse: Res<ButtonInput<MouseButton>>, window: Single<&Window>, cam_q: Query<(&Camera, &GlobalTransform)>, mut bots_q: Query<(&GlobalTransform, &mut BotData)>, crosshair: Res<FloatingCrosshair>) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
-    let (Ok((cam, cam_tf)), Ok(gun_tf)) = (cam_q.single(), gun_q.single()) else { return; };
-    let Ok(ray) = cam.viewport_to_world(cam_tf, Vec2::new(window.width() / 2.0, window.height() / 2.0) + crosshair.0) else { return; };
-    let target = sq.cast_ray(ray.origin, ray.direction, 1000.0, true, &SpatialQueryFilter::default()).map_or(ray.get_point(1000.0), |hit| ray.get_point(hit.distance));
-    let Ok(gun_dir) = Dir3::new(target - gun_tf.translation()) else { return; };
-    if let Some(hit) = sq.cast_ray(gun_tf.translation(), gun_dir, 1000.0, true, &SpatialQueryFilter::default()) { if let Ok(mut bot) = bots.get_mut(hit.entity) { bot.health -= 1; println!("Hit! Bot HP: {}", bot.health); } }
+    let Ok((cam, cam_tf)) = cam_q.single() else { return; };
+    let crosshair_2d = Vec2::new(window.width() / 2.0, window.height() / 2.0 - 50.0) + crosshair.0;
+    for (bot_tf, mut bot) in bots_q.iter_mut() {
+        if let Ok(bot_2d) = cam.world_to_viewport(cam_tf, bot_tf.translation()) {
+            if crosshair_2d.distance(bot_2d) < 100.0 { // 40.0 is the pixel radius of the "hitbox" on your screen
+                bot.health -= 1;
+                println!("2D Hit! Bot HP: {}", bot.health);
+            }
+        }
+    }
+}
+
+fn health_bar(player_query: Query<&PlayerData, With<Player>>, mut bar_query: Query<&mut Node, With<HealthBarUI>>) {
+    if let (Ok(player), Ok(mut node)) = (player_query.single(), bar_query.single_mut()) {
+        let health_percent = (player.health as f32 / 5.0) * 100.0;
+        node.width = Val::Percent(health_percent.clamp(0.0, 100.0))
+    }
 }
 
 fn main() {
@@ -406,10 +458,12 @@ fn main() {
             }),
             ..default()
         }))
+        .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0))) 
+        .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, bot_spawn)
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, shoot_gun))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, shoot_gun, health_bar, bot_death))
         .run();
 }
