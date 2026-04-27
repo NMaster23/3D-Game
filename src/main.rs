@@ -357,12 +357,12 @@ fn setup(
         RigidBody::Static,
         Mesh3d(meshes.add(Cuboid::new(100.0, 2.0, 100.0))),
         Collider::cuboid(100.0, 1.0, 100.0),
-        Transform::from_xyz(0.0, -10.0, 0.0)
+        Transform::from_xyz(0.0, -10.0, 0.0).with_rotation(Quat::from_rotation_x(90.0f32.to_radians()))
     ));
     commands.spawn((
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Terrain\\Terrain.glb"))),
         RigidBody::Static,
-        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
+        Transform::from_rotation(Quat::from_rotation_x(90.0f32.to_radians())),
     ));
     commands.spawn((
         Node {
@@ -452,8 +452,6 @@ fn health_bar(player_query: Query<&PlayerData, With<Player>>, mut bar_query: Que
     }
 }
 
-fn fix_gltf_colliders(mut cmd: Commands, q: Query<Entity, Added<Mesh3d>>) { for e in &q { cmd.entity(e).insert(ColliderConstructor::TrimeshFromMesh); } }
-
 fn main() {
     App::new() 
         .add_plugins(EmbeddedAssetPlugin::default())
@@ -472,6 +470,6 @@ fn main() {
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, bot_spawn)
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, shoot_gun, health_bar, bot_death, fix_gltf_colliders))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, shoot_gun, health_bar, bot_death))
         .run();
 }
