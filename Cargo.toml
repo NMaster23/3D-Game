@@ -7,5 +7,7 @@ edition = "2024"
 avian3d = "0.6.1"
 bevy = { version = "*", features = ["jpeg", "custom_cursor"] }
 bevy_animation = "0.18.1"
+bevy_embedded_assets = "0.15.0"
+include_dir = "0.7.4"
 log = { version = "*", features = ["max_level_debug", "release_max_level_warn"] }
 rand = "0.10.1"

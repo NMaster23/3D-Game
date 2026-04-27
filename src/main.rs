@@ -4,6 +4,7 @@ use avian3d::prelude::*;
 use std::time::Duration;
 use avian3d::math::PI;
 use rand::prelude::*;
+use bevy_embedded_assets::EmbeddedAssetPlugin;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -86,7 +87,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"))),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
-            health: 10,
+            health: 100,
             player_name: "Admin".into(),
             player_id: 1,
         },
@@ -171,7 +172,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
             SpotLight {
                 intensity: 500_000.0,
                 range: 30.0,
-                shadows_enabled: true,
+                shadows_enabled: false,
                 shadow_depth_bias: 0.2,
                 shadow_normal_bias: 0.2,
                 color: Color::WHITE,
@@ -354,6 +355,7 @@ fn setup(
 ) {
     commands.spawn((
         RigidBody::Static,
+        Mesh3d(meshes.add(Cuboid::new(100.0, 2.0, 100.0))),
         Collider::cuboid(100.0, 1.0, 100.0),
         Transform::from_xyz(0.0, -10.0, 0.0)
     ));
@@ -450,8 +452,11 @@ fn health_bar(player_query: Query<&PlayerData, With<Player>>, mut bar_query: Que
     }
 }
 
+fn fix_gltf_colliders(mut cmd: Commands, q: Query<Entity, Added<Mesh3d>>) { for e in &q { cmd.entity(e).insert(ColliderConstructor::TrimeshFromMesh); } }
+
 fn main() {
     App::new() 
+        .add_plugins(EmbeddedAssetPlugin::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Mech Game".into(),
@@ -467,6 +472,6 @@ fn main() {
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, bot_spawn)
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, shoot_gun, health_bar, bot_death))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, shoot_gun, health_bar, bot_death, fix_gltf_colliders))
         .run();
 }
