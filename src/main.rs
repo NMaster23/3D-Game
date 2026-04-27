@@ -353,6 +353,16 @@ fn setup(
     asset_server: Res<AssetServer>,
 ) {
     commands.spawn((
+        RigidBody::Static,
+        Collider::cuboid(2000.0, 1.0, 2000.0),
+        Transform::from_xyz(0.0, -0.5, 0.0)
+    ));
+    commands.spawn((
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Terrain\\Terrain.glb"))),
+        RigidBody::Static,
+        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
+    ));
+    commands.spawn((
         Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
@@ -372,12 +382,6 @@ fn setup(
             Crosshair,
         ));
     });
-    commands.spawn((
-        RigidBody::Static,
-        Mesh3d(meshes.add(Cuboid::new(100.0, 0.5, 100.0))),
-        Collider::cuboid(100.0, 0.1, 100.0),
-        MeshMaterial3d(materials.add(Color::WHITE)),
-    ));
     // camera
     commands.spawn((
         Camera3d::default(),
@@ -429,12 +433,11 @@ pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode
 fn shoot_gun(mouse: Res<ButtonInput<MouseButton>>, window: Single<&Window>, cam_q: Query<(&Camera, &GlobalTransform)>, mut bots_q: Query<(&GlobalTransform, &mut BotData)>, crosshair: Res<FloatingCrosshair>) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
     let Ok((cam, cam_tf)) = cam_q.single() else { return; };
-    let crosshair_2d = Vec2::new(window.width() / 2.0, window.height() / 2.0 - 50.0) + crosshair.0;
+    let crosshair_2d = Vec2::new(window.width() / 2.0, window.height() / 2.0 - 100.0) + crosshair.0;
     for (bot_tf, mut bot) in bots_q.iter_mut() {
         if let Ok(bot_2d) = cam.world_to_viewport(cam_tf, bot_tf.translation()) {
             if crosshair_2d.distance(bot_2d) < 100.0 { // 40.0 is the pixel radius of the "hitbox" on your screen
                 bot.health -= 1;
-                println!("2D Hit! Bot HP: {}", bot.health);
             }
         }
     }
