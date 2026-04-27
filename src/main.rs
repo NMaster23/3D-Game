@@ -354,8 +354,8 @@ fn setup(
 ) {
     commands.spawn((
         RigidBody::Static,
-        Collider::cuboid(2000.0, 1.0, 2000.0),
-        Transform::from_xyz(0.0, -0.5, 0.0)
+        Collider::cuboid(100.0, 1.0, 100.0),
+        Transform::from_xyz(0.0, -10.0, 0.0)
     ));
     commands.spawn((
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Terrain\\Terrain.glb"))),
