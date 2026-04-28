@@ -1,4 +1,4 @@
-use bevy::{core_pipeline::Skybox, post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use avian3d::prelude::*;
 use std::time::Duration;
@@ -354,13 +354,11 @@ fn setup(
     asset_server: Res<AssetServer>,
 ) {
     commands.spawn((
-        RigidBody::Static,
-        Mesh3d(meshes.add(Cuboid::new(100.0, 2.0, 100.0))),
-        Collider::cuboid(100.0, 1.0, 100.0),
-    ));
-    commands.spawn((
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Terrain.glb"))),
         RigidBody::Static,
+        Transform::from_scale(Vec3::splat(200.0)),
+        Transform::from_xyz(0.0, -1000.0, 0.0),
+        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh)
     ));
     commands.spawn((
         Node {
@@ -383,7 +381,6 @@ fn setup(
         ));
     });
     // camera
-    let sky = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Sky.glb"));
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -396,6 +393,7 @@ fn setup(
             ..default()
         },
     ));
+    let sky = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Sky.glb"));
     commands.spawn((
         SceneRoot(sky),
         Transform::from_scale(Vec3::splat(20.0)),
