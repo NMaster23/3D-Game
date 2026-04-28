@@ -1,4 +1,4 @@
-use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::WindowResolution, window::{CursorGrabMode, CursorOptions}};
+use bevy::{core_pipeline::Skybox, post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use avian3d::prelude::*;
 use std::time::Duration;
@@ -357,12 +357,10 @@ fn setup(
         RigidBody::Static,
         Mesh3d(meshes.add(Cuboid::new(100.0, 2.0, 100.0))),
         Collider::cuboid(100.0, 1.0, 100.0),
-        Transform::from_xyz(0.0, -10.0, 0.0).with_rotation(Quat::from_rotation_x(90.0f32.to_radians()))
     ));
     commands.spawn((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Terrain\\Terrain.glb"))),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Terrain.glb"))),
         RigidBody::Static,
-        Transform::from_rotation(Quat::from_rotation_x(90.0f32.to_radians())),
     ));
     commands.spawn((
         Node {
@@ -385,10 +383,22 @@ fn setup(
         ));
     });
     // camera
+    let sky = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Sky.glb"));
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
         Bloom::NATURAL,
+    ));
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 5000.0,
+            shadows_enabled: true,
+            ..default()
+        },
+    ));
+    commands.spawn((
+        SceneRoot(sky),
+        Transform::from_scale(Vec3::splat(20.0)),
     ));
     commands.spawn(Node {
         width: Val::Percent(100.0),
@@ -432,19 +442,6 @@ pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode
     }
 }
 
-fn shoot_gun(mouse: Res<ButtonInput<MouseButton>>, window: Single<&Window>, cam_q: Query<(&Camera, &GlobalTransform)>, mut bots_q: Query<(&GlobalTransform, &mut BotData)>, crosshair: Res<FloatingCrosshair>) {
-    if !mouse.just_pressed(MouseButton::Left) { return; }
-    let Ok((cam, cam_tf)) = cam_q.single() else { return; };
-    let crosshair_2d = Vec2::new(window.width() / 2.0, window.height() / 2.0 - 100.0) + crosshair.0;
-    for (bot_tf, mut bot) in bots_q.iter_mut() {
-        if let Ok(bot_2d) = cam.world_to_viewport(cam_tf, bot_tf.translation()) {
-            if crosshair_2d.distance(bot_2d) < 100.0 { // 40.0 is the pixel radius of the "hitbox" on your screen
-                bot.health -= 1;
-            }
-        }
-    }
-}
-
 fn health_bar(player_query: Query<&PlayerData, With<Player>>, mut bar_query: Query<&mut Node, With<HealthBarUI>>) {
     if let (Ok(player), Ok(mut node)) = (player_query.single(), bar_query.single_mut()) {
         let health_percent = (player.health as f32 / 5.0) * 100.0;
@@ -467,9 +464,8 @@ fn main() {
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0))) 
-        .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, bot_spawn)
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, shoot_gun, health_bar, bot_death))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, bot_death))
         .run();
 }
