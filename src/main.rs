@@ -1,5 +1,5 @@
-use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
-use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion};
+
 use avian3d::prelude::*;
 use std::time::Duration;
 use avian3d::math::PI;
@@ -18,9 +18,10 @@ struct Bots;
 #[derive(Component)]
 struct HealthBarUI;
 
-#[derive(Component)]
-pub struct Hiding {
-    is_hidden: bool,
+#[derive(Resource, Default)]
+struct TerrainGen {
+    terrain: Handle<Scene>,
+    loading_collision: Option<Entity>,
 }
 
 #[derive(Component)]
@@ -79,12 +80,13 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         animations: node_indices,
         graph_handle,
     });
+    let player_model = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"));
     commands.spawn((
         GlobalTransform::default(),
         Player,
         RigidBody::Dynamic,
-        Collider::cuboid(1.0, 3.0, 1.0),
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"))),
+        Collider::cuboid(1.0, 2.0, 1.0),
+        SceneRoot(player_model),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
             health: 100,
@@ -97,7 +99,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
     ))
     .with_children(|parent| {
         parent.spawn((
-            Mesh3d(meshes.add(Sphere::new(0.1))),
+            Mesh3d(meshes.add(Sphere::new(0.1).mesh().uv(32, 18))),
             MeshMaterial3d(materials.add(StandardMaterial {
                 emissive: (Color::WHITE).into(),
                 ..default()
@@ -245,7 +247,6 @@ fn movement_animations(
         let Some((&playing_animation_index, _)) = player.playing_animations().next() else {
             continue;
         };
-
         if keyboard_input.pressed(KeyCode::KeyW) {
             let playing_animation = player.animation_mut(playing_animation_index).unwrap();
             playing_animation.set_speed(1.0);
@@ -352,12 +353,20 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
+    mut terrain_gen: ResMut<TerrainGen>
 ) {
-    commands.spawn((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Terrain.glb"))),
+    let floor_id = commands.spawn((
+        Collider::cuboid(100.0, 1.0, 100.0),
         RigidBody::Static,
-        Transform::from_scale(Vec3::splat(200.0)),
-        Transform::from_xyz(0.0, -1000.0, 0.0),
+        Transform::from_xyz(0.0, -5.0, 0.0)
+    )).id();
+    terrain_gen.loading_collision = Some(floor_id);
+    let terrain = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Terrain.glb"));
+    terrain_gen.terrain = terrain.clone();
+    commands.spawn((
+        SceneRoot(terrain),
+        RigidBody::Static,
+        Transform::from_xyz(0.0, -10.0, 0.0).with_scale(Vec3::splat(200.0)),
         ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh)
     ));
     commands.spawn((
@@ -447,6 +456,38 @@ fn health_bar(player_query: Query<&PlayerData, With<Player>>, mut bar_query: Que
     }
 }
 
+fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<Scene>>, mut terrain_gen: ResMut<TerrainGen>) {
+    let terrain_id = terrain_gen.terrain.id();
+    for event in events.read() {
+        if let AssetEvent::LoadedWithDependencies { id } = event {
+            if *id == terrain_id {
+                if let Some(entity) = terrain_gen.loading_collision {
+                    commands.entity(entity).despawn();
+                    terrain_gen.loading_collision = None;
+                }
+            }
+        }
+    }
+}
+
+fn shooting(mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<FloatingCrosshair>, windows: Query<&Window>, camera_query: Query<(&Camera, &GlobalTransform), With<Camera3d>>, player_query: Query<Entity, With<Player>>, spatial_query: SpatialQuery, mut bots: Query<&mut BotData>) {
+    if !mouse_button.pressed(MouseButton::Left) { return; }
+    let Ok(window) = windows.single() else { return };
+    let Ok((camera, camera_transform)) = camera_query.single() else { return };
+    let Ok(player_entity) = player_query.single() else { return };
+    let view_pos = Vec2::new(
+        window.width() / 2.0 + crosshair.0.x,
+        window.height() / 2.0 + crosshair.0.y - 100.0,
+    );
+    let Ok(ray) = camera.viewport_to_world(camera_transform, view_pos) else { return };
+    let filter = SpatialQueryFilter::from_excluded_entities([player_entity]);
+    if let Some(hit) = spatial_query.cast_ray(ray.origin, ray.direction, 1000.0, true, &filter) {
+        if let Ok(mut bot_data) = bots.get_mut(hit.entity) {
+            bot_data.health -= 1;
+        }
+    }
+}
+
 fn main() {
     App::new() 
         .add_plugins(EmbeddedAssetPlugin::default())
@@ -459,11 +500,12 @@ fn main() {
             }),
             ..default()
         }))
+        .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, bot_spawn)
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, bot_death))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, bot_death, mesh_load_check))
         .run();
 }
