@@ -85,8 +85,8 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         GlobalTransform::default(),
         Player,
         RigidBody::Dynamic,
-        Collider::cuboid(1.0, 2.0, 1.0),
         SceneRoot(player_model),
+        ColliderConstructorHierarchy::new(ColliderConstructor::ConvexHullFromMesh),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
             health: 100,
@@ -366,7 +366,7 @@ fn setup(
     commands.spawn((
         SceneRoot(terrain),
         RigidBody::Static,
-        Transform::from_xyz(0.0, -10.0, 0.0).with_scale(Vec3::splat(200.0)),
+        Transform::from_xyz(0.0, -10.0, 0.0).with_scale(Vec3::splat(2000.0)),
         ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh)
     ));
     commands.spawn((
@@ -506,6 +506,6 @@ fn main() {
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, bot_spawn)
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, bot_death, mesh_load_check))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, bot_death, mesh_load_check, shooting))
         .run();
 }
