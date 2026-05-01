@@ -86,7 +86,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         Player,
         RigidBody::Dynamic,
         SceneRoot(player_model),
-        ColliderConstructorHierarchy::new(ColliderConstructor::ConvexHullFromMesh),
+        Collider::capsule(1.0, 3.0),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
             health: 100,
@@ -96,29 +96,9 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         CharacterController {
             move_direction: Vec3::ZERO,
         },
+        LockedAxes::ROTATION_LOCKED
     ))
     .with_children(|parent| {
-        parent.spawn((
-            Mesh3d(meshes.add(Sphere::new(0.1).mesh().uv(32, 18))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                emissive: (Color::WHITE).into(),
-                ..default()
-            })),
-            SpotLight {
-                intensity: 1_000_000.0,
-                range: 10.0,
-                inner_angle: PI / 8.0,
-                outer_angle: PI / 6.0,
-                shadows_enabled: true,
-                shadow_depth_bias: 0.2,
-                shadow_normal_bias: 0.2,
-                color: Color::WHITE,
-                ..default()
-            },
-            Lighting,
-            Visibility::Visible,
-            Transform::from_xyz(0.0, 3.0, 0.0).looking_at(Vec3::new(0.0, 3.0, 10.0), Vec3::Y),
-        ));
         parent.spawn((
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Gun\\Gun.glb"))),
             Transform {
@@ -133,7 +113,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
 }
 
 fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let bot_number = 5;
+    let bot_number = 10;
     let mut rng = rand::rng();
     let hits = rng.random_range(1..20);
     let hits_num = rng.random_range(1..5);
@@ -150,7 +130,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
             GlobalTransform::default(),
             Bots,
             RigidBody::Dynamic,
-            Collider::cuboid(3.0, 3.0, 3.0),
+            Collider::capsule(1.0, 3.0),
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"))),
             BotData {
                 health: hits,
@@ -163,26 +143,8 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
             CharacterController {
                 move_direction: Vec3::ZERO,
             },
-        ))
-        .with_children(|parent| {
-        parent.spawn((
-            Mesh3d(meshes.add(Sphere::new(0.1))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                emissive: (Color::WHITE).into(),
-                ..default()
-            })),
-            SpotLight {
-                intensity: 500_000.0,
-                range: 30.0,
-                shadows_enabled: false,
-                shadow_depth_bias: 0.2,
-                shadow_normal_bias: 0.2,
-                color: Color::WHITE,
-                ..default()
-            },
-            Transform::from_xyz(0.0, 10.0, 0.0).looking_at(Vec3::new(0.0, 3.0, 10.0), Vec3::Y),
+            LockedAxes::ROTATION_LOCKED,
         ));
-    });
     }
 }
 
@@ -198,23 +160,29 @@ fn bot_death(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>,) {
 
 fn bot_handling(
     time: Res<Time>,
-    mut q: Query<(Entity, &mut Transform, &mut CharacterController, &BotData), (With<Bots>, Without<Player>)>,
+    mut q: Query<(Entity, &mut Transform, &mut CharacterController, &BotData, &mut LinearVelocity), (With<Bots>, Without<Player>)>,
     mut p: Query<(&Transform, &mut PlayerData), With<Player>>,
 ) {
     let Ok((pt, mut pd)) = p.single_mut() else { return; };
-    let pos: Vec<_> = q.iter().map(|(e, t, _, _)| (e, t.translation)).collect();
-    for (e, mut t, mut c, b) in q.iter_mut() {
-        let dir = (pt.translation - t.translation).normalize_or_zero();
-        let sep: Vec3 = pos.iter().filter(|(oe, _)| e != *oe).filter_map(|(_, ot)| {
-            let d = t.translation.distance(*ot);
-            (d > 0.0 && d < 2.0).then(|| (t.translation - *ot).normalize_or_zero() * (1.0 - d / 2.0))
-        }).sum();
-        let f_dir = (dir + sep * 1.5).normalize_or_zero();
-        c.move_direction = f_dir * 2.5;
-        if f_dir.length_squared() > 0.0 {
-            t.rotation = t.rotation.slerp(Quat::from_rotation_y(f_dir.x.atan2(f_dir.z)), time.delta_secs() * 5.0);
+    let pos: Vec<_> = q.iter().map(|(e, t, _, _, _)| (e, t.translation)).collect();
+    for (e, mut t, mut c, b, mut lv) in q.iter_mut() {
+        if b.health >= 0 {
+            let dir = (pt.translation - t.translation).normalize_or_zero();
+            let sep: Vec3 = pos.iter().filter(|(oe, _)| e != *oe).filter_map(|(_, ot)| {
+                let d = t.translation.distance(*ot);
+                (d > 0.0 && d < 2.0).then(|| (t.translation - *ot).normalize_or_zero() * (1.0 - d / 2.0))
+            }).sum();
+            let f_dir = (dir + sep * 1.5).normalize_or_zero();
+            c.move_direction = f_dir * 2.5;
+            if f_dir.length_squared() > 0.0 {
+                t.rotation = t.rotation.slerp(Quat::from_rotation_y(f_dir.x.atan2(f_dir.z)), time.delta_secs() * 5.0);
+            }
+            lv.x = c.move_direction.x;
+            lv.z = c.move_direction.z;
+            if rand::rng().random_range(1..500) == b.hit_number { pd.health -= 1; }
+        } else {
+            println!("Dead")
         }
-        if rand::rng().random_range(1..500) == b.hit_number { pd.health -= 1; }
     }
 }
 
