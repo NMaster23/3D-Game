@@ -73,14 +73,14 @@ fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode
 
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut graphs: ResMut<Assets<AnimationGraph>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let (graph, node_indices) = AnimationGraph::from_clips([
-        asset_server.load(GltfAssetLabel::Animation(0).from_asset("Player\\Player.glb")),
+        asset_server.load(GltfAssetLabel::Animation(0).from_asset("Player/Player.glb")),
     ]);
     let graph_handle = graphs.add(graph);
     commands.insert_resource(Animations {
         animations: node_indices,
         graph_handle,
     });
-    let player_model = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"));
+    let player_model = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player/Player.glb"));
     commands.spawn((
         GlobalTransform::default(),
         Player,
@@ -100,7 +100,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
     ))
     .with_children(|parent| {
         parent.spawn((
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Gun\\Gun.glb"))),
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Gun/Gun.glb"))),
             Transform {
                 translation: Vec3::new(1.5, 2.0, 1.0),
                 scale: Vec3::splat(0.1),
@@ -131,7 +131,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
             Bots,
             RigidBody::Dynamic,
             Collider::capsule(1.0, 3.0),
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player\\Player.glb"))),
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player/Player.glb"))),
             BotData {
                 health: hits,
                 bot_id: i + 1,
@@ -329,7 +329,7 @@ fn setup(
         Transform::from_xyz(0.0, -5.0, 0.0)
     )).id();
     terrain_gen.loading_collision = Some(floor_id);
-    let terrain = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Terrain.glb"));
+    let terrain = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment/Terrain.glb"));
     terrain_gen.terrain = terrain.clone();
     commands.spawn((
         SceneRoot(terrain),
@@ -370,7 +370,7 @@ fn setup(
             ..default()
         },
     ));
-    let sky = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment\\Sky.glb"));
+    let sky = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment/Sky.glb"));
     commands.spawn((
         SceneRoot(sky),
         Transform::from_scale(Vec3::splat(20.0)),
