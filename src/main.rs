@@ -177,10 +177,9 @@ fn bot_handling(
             if f_dir.length_squared() > 0.0 {
                 t.rotation = t.rotation.slerp(Quat::from_rotation_y(f_dir.x.atan2(f_dir.z)), time.delta_secs() * 5.0);
             }
-            lv.x = c.move_direction.x;
-            lv.z = c.move_direction.z;
-            let rand_number = rand::rng().random_range(1..50);
-            lv.y = c.move_direction.y + ((rand_number as f32) / 10.0);
+            let rand_number = rand::rng().random_range(1..250);            
+            lv.x = c.move_direction.x + rand::rng().random_range(-10.0..10.0);
+            lv.z = c.move_direction.z + rand::rng().random_range(-10.0..10.0);
             if rand_number == b.hit_number { pd.health -= 1; }
         } else {
             println!("Dead")
