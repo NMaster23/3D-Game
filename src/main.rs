@@ -179,7 +179,9 @@ fn bot_handling(
             }
             lv.x = c.move_direction.x;
             lv.z = c.move_direction.z;
-            if rand::rng().random_range(1..500) == b.hit_number { pd.health -= 1; }
+            let rand_number = rand::rng().random_range(1..50);
+            lv.y = c.move_direction.y + ((rand_number as f32) / 10.0);
+            if rand_number == b.hit_number { pd.health -= 1; }
         } else {
             println!("Dead")
         }
@@ -272,7 +274,7 @@ fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshai
     let sens = 0.1;
     rotation.x += -mouse_movement.delta.x * sens;
     rotation.y += mouse_movement.delta.y * sens;
-    rotation.y = rotation.y.clamp(-34.9, 89.9);
+    rotation.y = rotation.y.clamp(-14.9, 89.9);
     *crosshair_offset += mouse_movement.delta * 0.5;
     *crosshair_offset = crosshair_offset.lerp(Vec2::ZERO, 0.02);
     *crosshair_offset = crosshair_offset.clamp(Vec2::splat(-150.0), Vec2::splat(150.0));
@@ -458,7 +460,9 @@ fn shooting(mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<Floating
 
 fn main() {
     App::new() 
-        .add_plugins(EmbeddedAssetPlugin::default())
+        .add_plugins(EmbeddedAssetPlugin {
+            mode: bevy_embedded_assets::PluginMode::ReplaceDefault,
+        })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Mech Game".into(),
