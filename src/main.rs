@@ -1,4 +1,4 @@
-use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion, picking::backend::ray::RayMap, color::palettes::css};
+use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion, picking::backend::ray::RayMap, color::palettes::css, math::ops};
 use avian3d::prelude::*;
 use std::time::Duration;
 use avian3d::math::PI;
@@ -62,35 +62,47 @@ struct Animations {
     graph_handle: Handle<AnimationGraph>,
 }
 
-const MAX_BOUNCES: usize = 64;
-const LASER_SPEED: f32 = 0.03;
+const MAX_BOUNCES: usize = 2;
 
-fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, ray_cast: &mut MeshRayCast, gizmos: &mut Gizmos, mut query: Query<(&BotData, &mut Transform), Changed<BotData>>,) {
-    let t = ops::cos((time.elapsed_secs() - 4.0).max(0.0) * LASER_SPEED) * PI;
+fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>) {
     let mut ray = Ray3d::new(ray_pos, ray_dir);
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
     let color = Color::from(css::RED);
 
     for i in 0..MAX_BOUNCES {
-        let Some((_, hit)) = ray_cast
+        let Some((entity, hit)) = ray_cast
             .cast_ray(ray, &MeshRayCastSettings::default())
             .first()
         else {
             break;
         };
         let brightness = 1.0 + 10.0 * (1.0 - i as f32 / MAX_BOUNCES as f32);
-        intersections.push((hit.point, Color::BLACK.mix(&color, brightness)));
+        intersections.push((hit.point, color.mix(&color, brightness)));
         ray.direction = Dir3::new(ray.direction.reflect(hit.normal)).unwrap();
         ray.origin = hit.point + ray.direction * 1e-6;
+        let hit = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
+        loop {
+            let current_entity = *entity;
+            if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
+                bot_data.health -= 1;
+                println!("Health -1")
+            }
+            if let Ok(parent) = parents.get(current_entity) {
+                current_entity = parent.get();
+            } else {
+                break;
+            }
     }
     gizmos.linestrip_gradient(intersections);
-    let hit = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
-        for (botdata, mut transform) in query.iter_mut() {
-            if botdata.health <= 0 {
-                transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
-                transform.translation.y = 0.5;
-            }
+}
+
+fn botdead(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>) {
+    for (botdata, mut transform) in query.iter_mut() {
+        if botdata.health <= 0 {
+            transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
+            transform.translation.y = 0.5;
+        }
     }
 }
 
@@ -452,24 +464,14 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn shooting(mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>) {
+fn shooting(mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, ray_cast: MeshRayCast) {
     if !mouse_button.pressed(MouseButton::Left) { return; }
-    ray_handling(ray_pos, ray_dir, time, ray_cast, gizmos, query);
-/*    let Ok(window) = windows.single() else { return };
-    let Ok((camera, camera_transform)) = camera_query.single() else { return };
-    let Ok(player_entity) = player_query.single() else { return };
-    let view_pos = Vec2::new(
-        window.width() / 2.0 + crosshair.0.x,
-        window.height() / 2.0 + crosshair.0.y - 100.0,
-    );
-    let Ok(ray) = camera.viewport_to_world(camera_transform, view_pos) else { return };
-    let filter = SpatialQueryFilter::from_excluded_entities([player_entity]);
-    if let Some(hit) = spatial_query.cast_ray(ray.origin, ray.direction, 1000.0, true, &filter) {
-        if let Ok(mut bot_data) = bots.get_mut(hit.entity) {
-            bot_data.health -= 1;
-        }
-    }*/
-    
+    let Ok(mut player_transform) = player_query.single_mut() else {
+        return;
+    };
+    let forward = -player_transform.forward();
+    let ray_pos = player_transform.translation + *forward * 2.5;
+    ray_handling(ray_pos, forward, time, ray_cast, &mut gizmos, query);
 }
 
 fn main() {
@@ -490,8 +492,7 @@ fn main() {
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0))) 
-        .add_systems(Startup, (spawn_player, setup))
-        .add_systems(Startup, bot_spawn)
+        .add_systems(Startup, (spawn_player, setup, bot_spawn))
         .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting))
         .run();
 }

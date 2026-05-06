@@ -2087,6 +2087,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "bevy_animation",
+ "bevy_ecs",
  "bevy_embedded_assets",
  "bevy_hanabi",
  "include_dir",
