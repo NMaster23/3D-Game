@@ -1,5 +1,4 @@
-use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion};
-
+use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion, picking::backend::ray::RayMap, color::palettes::css};
 use avian3d::prelude::*;
 use std::time::Duration;
 use avian3d::math::PI;
@@ -8,6 +7,9 @@ use bevy_embedded_assets::EmbeddedAssetPlugin;
 
 #[derive(Component)]
 pub struct Lighting;
+
+#[derive(Component)]
+pub struct IsBot;
 
 #[derive(Component)]
 struct Crosshair;
@@ -60,6 +62,38 @@ struct Animations {
     graph_handle: Handle<AnimationGraph>,
 }
 
+const MAX_BOUNCES: usize = 64;
+const LASER_SPEED: f32 = 0.03;
+
+fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, ray_cast: &mut MeshRayCast, gizmos: &mut Gizmos, mut query: Query<(&BotData, &mut Transform), Changed<BotData>>,) {
+    let t = ops::cos((time.elapsed_secs() - 4.0).max(0.0) * LASER_SPEED) * PI;
+    let mut ray = Ray3d::new(ray_pos, ray_dir);
+    let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
+    intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
+    let color = Color::from(css::RED);
+
+    for i in 0..MAX_BOUNCES {
+        let Some((_, hit)) = ray_cast
+            .cast_ray(ray, &MeshRayCastSettings::default())
+            .first()
+        else {
+            break;
+        };
+        let brightness = 1.0 + 10.0 * (1.0 - i as f32 / MAX_BOUNCES as f32);
+        intersections.push((hit.point, Color::BLACK.mix(&color, brightness)));
+        ray.direction = Dir3::new(ray.direction.reflect(hit.normal)).unwrap();
+        ray.origin = hit.point + ray.direction * 1e-6;
+    }
+    gizmos.linestrip_gradient(intersections);
+    let hit = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
+        for (botdata, mut transform) in query.iter_mut() {
+            if botdata.health <= 0 {
+                transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
+                transform.translation.y = 0.5;
+            }
+    }
+}
+
 fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>) {
     if mouse.just_pressed(MouseButton::Left) {
         cursor.grab_mode = CursorGrabMode::Locked;
@@ -97,19 +131,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
             move_direction: Vec3::ZERO,
         },
         LockedAxes::ROTATION_LOCKED
-    ))
-    .with_children(|parent| {
-        parent.spawn((
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Gun/Gun.glb"))),
-            Transform {
-                translation: Vec3::new(1.5, 2.0, 1.0),
-                scale: Vec3::splat(0.1),
-                rotation: Quat::from_rotation_y(PI / 2.0),
-                ..default()
-            },
-            GunBarrel,
-        ));
-    });
+    ));
 }
 
 fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
@@ -139,6 +161,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
                 bot_offset: i as f32 * 2.0 - (bots.bot_quantity as f32 - 1.0) * 2.0 / 2.0,
                 hit_number: hits_num,
             },
+            IsBot,
             Transform::from_xyz(bots.bot_offset, 10.0, -5.0),
             CharacterController {
                 move_direction: Vec3::ZERO,
@@ -147,16 +170,6 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
         ));
     }
 }
-
-fn bot_death(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>,) {
-    for (botdata, mut transform) in query.iter_mut() {
-        if botdata.health <= 0 {
-            transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
-            transform.translation.y = 0.5;
-        }
-    }
-}
-
 
 fn bot_handling(
     time: Res<Time>,
@@ -177,9 +190,9 @@ fn bot_handling(
             if f_dir.length_squared() > 0.0 {
                 t.rotation = t.rotation.slerp(Quat::from_rotation_y(f_dir.x.atan2(f_dir.z)), time.delta_secs() * 5.0);
             }
-            let rand_number = rand::rng().random_range(1..250);            
-            lv.x = c.move_direction.x + rand::rng().random_range(-10.0..10.0);
-            lv.z = c.move_direction.z + rand::rng().random_range(-10.0..10.0);
+            let rand_number = rand::rng().random_range(1..500);            
+            lv.x = c.move_direction.x + rand::rng().random_range(-5.0..5.0);
+            lv.z = c.move_direction.z + rand::rng().random_range(-5.0..5.0);
             if rand_number == b.hit_number { pd.health -= 1; }
         } else {
             println!("Dead")
@@ -439,9 +452,10 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn shooting(mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<FloatingCrosshair>, windows: Query<&Window>, camera_query: Query<(&Camera, &GlobalTransform), With<Camera3d>>, player_query: Query<Entity, With<Player>>, spatial_query: SpatialQuery, mut bots: Query<&mut BotData>) {
+fn shooting(mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>) {
     if !mouse_button.pressed(MouseButton::Left) { return; }
-    let Ok(window) = windows.single() else { return };
+    ray_handling(ray_pos, ray_dir, time, ray_cast, gizmos, query);
+/*    let Ok(window) = windows.single() else { return };
     let Ok((camera, camera_transform)) = camera_query.single() else { return };
     let Ok(player_entity) = player_query.single() else { return };
     let view_pos = Vec2::new(
@@ -454,7 +468,8 @@ fn shooting(mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<Floating
         if let Ok(mut bot_data) = bots.get_mut(hit.entity) {
             bot_data.health -= 1;
         }
-    }
+    }*/
+    
 }
 
 fn main() {
@@ -477,6 +492,6 @@ fn main() {
         .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, bot_spawn)
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, bot_death, mesh_load_check, shooting))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting))
         .run();
 }
