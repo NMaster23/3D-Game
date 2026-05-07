@@ -1,7 +1,6 @@
 use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion, picking::backend::ray::RayMap, color::palettes::css, math::ops};
 use avian3d::prelude::*;
-use std::time::Duration;
-use avian3d::math::PI;
+use std::{time::Duration, ops::{Deref, DerefMut}};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 
@@ -62,9 +61,18 @@ struct Animations {
     graph_handle: Handle<AnimationGraph>,
 }
 
+impl Deref for FloatingCrosshair {
+    type Target = Vec2;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+
+impl DerefMut for FloatingCrosshair {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+}
+
 const MAX_BOUNCES: usize = 2;
 
-fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>) {
+fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
     let mut ray = Ray3d::new(ray_pos, ray_dir);
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
@@ -81,25 +89,25 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: Mes
         intersections.push((hit.point, color.mix(&color, brightness)));
         ray.direction = Dir3::new(ray.direction.reflect(hit.normal)).unwrap();
         ray.origin = hit.point + ray.direction * 1e-6;
-        let hit = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
+        let mut current_entity = *entity;
         loop {
-            let current_entity = *entity;
             if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
                 bot_data.health -= 1;
                 println!("Health -1")
             }
             if let Ok(parent) = parents.get(current_entity) {
-                current_entity = parent.get();
+                current_entity = parent.0;
             } else {
                 break;
             }
+        }
     }
     gizmos.linestrip_gradient(intersections);
 }
 
 fn botdead(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>) {
     for (botdata, mut transform) in query.iter_mut() {
-        if botdata.health <= 0 {
+        if botdata.health < 0 {
             transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
             transform.translation.y = 0.5;
         }
@@ -284,7 +292,7 @@ fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(
     }
 }
 
-fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshair_offset: Local<Vec2>, mouse_button: Res<ButtonInput<MouseButton>>, mouse_movement: Res<AccumulatedMouseMotion>, mut player_data: Query<&mut Transform, With<Player>>, mut camera_data: Query<&mut Transform, (With<Camera3d>, Without<Player>)>, mut rotation: Local<Vec2>) {
+fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshair_offset: ResMut<FloatingCrosshair>, mouse_button: Res<ButtonInput<MouseButton>>, mouse_movement: Res<AccumulatedMouseMotion>, mut player_data: Query<&mut Transform, With<Player>>, mut camera_data: Query<&mut Transform, (With<Camera3d>, Without<Player>)>, mut rotation: Local<Vec2>) {
     let Ok(mut player_transform) = player_data.single_mut() else {
         return;
     };
@@ -299,9 +307,9 @@ fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshai
     rotation.x += -mouse_movement.delta.x * sens;
     rotation.y += mouse_movement.delta.y * sens;
     rotation.y = rotation.y.clamp(-14.9, 89.9);
-    *crosshair_offset += mouse_movement.delta * 0.5;
-    *crosshair_offset = crosshair_offset.lerp(Vec2::ZERO, 0.02);
-    *crosshair_offset = crosshair_offset.clamp(Vec2::splat(-150.0), Vec2::splat(150.0));
+    **crosshair_offset += mouse_movement.delta * 0.5;
+    **crosshair_offset = crosshair_offset.lerp(Vec2::ZERO, 0.02);
+    **crosshair_offset = crosshair_offset.clamp(Vec2::splat(-150.0), Vec2::splat(150.0));
     if let Ok(mut node) = query.single_mut() {
         node.left = Val::Px(crosshair_offset.x);
         node.top = Val::Px(crosshair_offset.y - 100.0);
@@ -464,14 +472,24 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn shooting(mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, ray_cast: MeshRayCast) {
+fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
     if !mouse_button.pressed(MouseButton::Left) { return; }
     let Ok(mut player_transform) = player_query.single_mut() else {
         return;
     };
+    let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0,);
+    let (inner_camera, camera_transform) = *camera;
+    let Ok(camera_ray) = inner_camera.viewport_to_world(camera_transform, in_screen_pos) else { return; };
+    let target = if let Some((_, hit)) = ray_cast.cast_ray(camera_ray, &MeshRayCastSettings::default()).first() {
+        hit.point
+    } else {
+        camera_ray.origin + *camera_ray.direction * 100.0
+    };
+    let crosshair_pos = Vec3::new(crosshair.x, 0.0, crosshair.y);
     let forward = -player_transform.forward();
     let ray_pos = player_transform.translation + *forward * 2.5;
-    ray_handling(ray_pos, forward, time, ray_cast, &mut gizmos, query);
+    let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
+    ray_handling(ray_pos, dir, time, ray_cast, &mut gizmos, query, parent);
 }
 
 fn main() {
