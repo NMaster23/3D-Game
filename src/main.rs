@@ -1,4 +1,4 @@
-use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion, picking::backend::ray::RayMap, color::palettes::css, math::ops};
+use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion, color::palettes::css};
 use avian3d::prelude::*;
 use std::{time::Duration, ops::{Deref, DerefMut}};
 use rand::prelude::*;
@@ -77,7 +77,7 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: Mes
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
     let color = Color::from(css::RED);
-
+    let mut total_length = 0.0;
     for i in 0..MAX_BOUNCES {
         let Some((entity, hit)) = ray_cast
             .cast_ray(ray, &MeshRayCastSettings::default())
@@ -85,6 +85,8 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: Mes
         else {
             break;
         };
+        total_length += hit.distance;
+        println!("Hit Distance: {}", total_length);
         let brightness = 1.0 + 10.0 * (1.0 - i as f32 / MAX_BOUNCES as f32);
         intersections.push((hit.point, color.mix(&color, brightness)));
         ray.direction = Dir3::new(ray.direction.reflect(hit.normal)).unwrap();
