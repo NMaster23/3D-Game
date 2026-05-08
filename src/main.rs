@@ -53,6 +53,8 @@ pub struct PlayerData {
     health: i32,
     player_name: String,
     player_id: u32,
+    jumps: u32,
+    jump_timer: Timer,
 }
 
 #[derive(Resource)]
@@ -86,22 +88,26 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: Mes
             break;
         };
         total_length += hit.distance;
-        println!("Hit Distance: {}", total_length);
+        if total_length > 10.0 {
+            break;
+        }
         let brightness = 1.0 + 10.0 * (1.0 - i as f32 / MAX_BOUNCES as f32);
         intersections.push((hit.point, color.mix(&color, brightness)));
         ray.direction = Dir3::new(ray.direction.reflect(hit.normal)).unwrap();
         ray.origin = hit.point + ray.direction * 1e-6;
         let mut current_entity = *entity;
+        let mut dir_y: f32 = 0.0;
         loop {
-            if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
-                bot_data.health -= 1;
-                println!("Health -1")
-            }
             if let Ok(parent) = parents.get(current_entity) {
                 current_entity = parent.0;
             } else {
                 break;
             }
+            if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
+                bot_data.health -= 1;
+                println!("Health -1")
+            }
+            dir_y = 100.0 * dir_y.sin() - 15.0 * time.delta_secs();
         }
     }
     gizmos.linestrip_gradient(intersections);
@@ -148,6 +154,8 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
             health: 100,
             player_name: "Admin".into(),
             player_id: 1,
+            jumps: 2,
+            jump_timer: Timer::from_seconds(2.0, TimerMode::Once)
         },
         CharacterController {
             move_direction: Vec3::ZERO,
@@ -246,6 +254,8 @@ fn movement_animations(
     mut animation_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
     _animations: Res<Animations>,
     _current_animation: Local<usize>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
 ) {
     for (mut player, _transitions) in &mut animation_players {
         let Some((&playing_animation_index, _)) = player.playing_animations().next() else {
@@ -255,6 +265,9 @@ fn movement_animations(
             let playing_animation = player.animation_mut(playing_animation_index).unwrap();
             playing_animation.set_speed(1.0);
             playing_animation.resume();
+            commands.spawn(AudioPlayer::new(
+                asset_server.load("Player/Footstep.mp3"),
+            ));
         } else if keyboard_input.pressed(KeyCode::KeyS) {
             let playing_animation = player.animation_mut(playing_animation_index).unwrap();
             playing_animation.set_speed(-1.0);
@@ -267,8 +280,8 @@ fn movement_animations(
     }
 }
 
-fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>) {
-    for (transform, mut linear_velocity, player, mut controller) in query.iter_mut() {
+fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>) {
+    for (transform, mut linear_velocity, mut player, mut controller) in query.iter_mut() {
         let mut move_direction = Vec3::ZERO;
         if keyboard_input.pressed(KeyCode::KeyW) && player.health > 0 {
             move_direction.z += 1.0;
@@ -283,7 +296,17 @@ fn player_movement(keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(
             move_direction.x -= 1.0;
         }
         if keyboard_input.just_pressed(KeyCode::Space) && player.health > 0 {
-            linear_velocity.y = 10.0;
+            if player.jumps == 0 {
+                player.jump_timer.tick(time.delta());
+                if player.jump_timer.just_finished() {
+                    player.jumps = 2;
+                    player.jump_timer.reset();
+                }
+            }
+            if player.jumps > 0 {
+                linear_velocity.y = 10.0;
+                player.jumps -= 1;
+            }
         }
         
         let velocity = (transform.rotation * move_direction).normalize_or_zero() * 5.0;
@@ -409,7 +432,7 @@ fn setup(
     let sky = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment/Sky.glb"));
     commands.spawn((
         SceneRoot(sky),
-        Transform::from_scale(Vec3::splat(20.0)),
+        Transform::from_scale(Vec3::splat(200.0)),
     ));
     commands.spawn(Node {
         width: Val::Percent(100.0),
@@ -489,7 +512,7 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
     };
     let crosshair_pos = Vec3::new(crosshair.x, 0.0, crosshair.y);
     let forward = -player_transform.forward();
-    let ray_pos = player_transform.translation + *forward * 2.5;
+    let ray_pos = player_transform.translation + *forward * 2.25;
     let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
     ray_handling(ray_pos, dir, time, ray_cast, &mut gizmos, query, parent);
 }
@@ -511,8 +534,8 @@ fn main() {
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
-        .insert_resource(Gravity(Vec3::new(0.0, -35.0, 0.0))) 
+        .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup, bot_spawn))
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead))
         .run();
 }
