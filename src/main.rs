@@ -1,8 +1,9 @@
-use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion, color::palettes::css};
+use bevy::{post_process::bloom::Bloom, prelude::*, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, input::mouse::AccumulatedMouseMotion, color::palettes::css, render::view::Hdr, core_pipeline::tonemapping::Tonemapping};
 use avian3d::prelude::*;
 use std::{time::Duration, ops::{Deref, DerefMut}};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
+use bevy_hanabi::prelude::*;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -41,9 +42,6 @@ struct CharacterController {
 
 #[derive(Resource, Default)]
 struct FloatingCrosshair(Vec2);
-
-#[derive(Component)]
-struct GunBarrel;
 
 #[derive(Component)]
 struct Player;
@@ -111,6 +109,67 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: Mes
         }
     }
     gizmos.linestrip_gradient(intersections);
+}
+
+fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>) {
+    let mut gradient = Gradient::new();
+  gradient.add_key(0.0, Vec4::new(1., 0., 0., 1.));
+  gradient.add_key(1.0, Vec4::splat(0.));
+
+  // Create a new expression module
+  let mut module = Module::default();
+
+  // On spawn, randomly initialize the position of the particle
+  // to be over the surface of a sphere of radius 2 units.
+  let init_pos = SetPositionSphereModifier {
+      center: module.lit(Vec3::ZERO),
+      radius: module.lit(2.),
+      dimension: ShapeDimension::Surface,
+  };
+
+  // Also initialize a radial initial velocity to 6 units/sec
+  // away from the (same) sphere center.
+  let init_vel = SetVelocitySphereModifier {
+      center: module.lit(Vec3::ZERO),
+      speed: module.lit(6.),
+  };
+
+  // Initialize the total lifetime of the particle, that is
+  // the time for which it's simulated and rendered. This modifier
+  // is almost always required, otherwise the particles won't show.
+  let lifetime = module.lit(10.); // literal value "10.0"
+  let init_lifetime = SetAttributeModifier::new(
+      Attribute::LIFETIME, lifetime);
+
+  // Every frame, add a gravity-like acceleration downward
+  let accel = module.lit(Vec3::new(0., -3., 0.));
+  let update_accel = AccelModifier::new(accel);
+
+  // Create the effect asset
+  let effect = EffectAsset::new(
+    // Maximum number of particles alive at a time
+    32768,
+    // Spawn at a rate of 5 particles per second
+    SpawnerSettings::rate(5.0.into()),
+    // Move the expression module into the asset
+    module
+  )
+  .with_name("MyEffect")
+  .init(init_pos)
+  .init(init_vel)
+  .init(init_lifetime)
+  .update(update_accel)
+  // Render the particles with a color gradient over their
+  // lifetime. This maps the gradient key 0 to the particle spawn
+  // time, and the gradient key 1 to the particle death (10s).
+  .render(ColorOverLifetimeModifier { gradient, ..default() });
+
+  // Insert into the asset system
+  let effect_handle = effects.add(effect);
+  commands.spawn((
+    ParticleEffect::new(effect_handle),
+    Transform::from_translation(Vec3::Y),
+    ));
 }
 
 fn botdead(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>) {
@@ -265,9 +324,6 @@ fn movement_animations(
             let playing_animation = player.animation_mut(playing_animation_index).unwrap();
             playing_animation.set_speed(1.0);
             playing_animation.resume();
-            commands.spawn(AudioPlayer::new(
-                asset_server.load("Player/Footstep.mp3"),
-            ));
         } else if keyboard_input.pressed(KeyCode::KeyS) {
             let playing_animation = player.animation_mut(playing_animation_index).unwrap();
             playing_animation.set_speed(-1.0);
@@ -421,6 +477,8 @@ fn setup(
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
         Bloom::NATURAL,
+        Hdr,
+        Tonemapping::None,
     ));
     commands.spawn((
         DirectionalLight {
@@ -531,11 +589,12 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(HanabiPlugin)
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
-        .add_systems(Startup, (spawn_player, setup, bot_spawn))
+        .add_systems(Startup, (spawn_player, setup, bot_spawn, particle_effects))
         .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead))
         .run();
 }
