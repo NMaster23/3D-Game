@@ -383,12 +383,6 @@ fn setup(
     asset_server: Res<AssetServer>,
     mut terrain_gen: ResMut<TerrainGen>
 ) {
-    let floor_id = commands.spawn((
-        Collider::cuboid(100.0, 1.0, 100.0),
-        RigidBody::Static,
-        Transform::from_xyz(0.0, -5.0, 0.0)
-    )).id();
-    terrain_gen.loading_collision = Some(floor_id);
     let terrain = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment/Terrain.glb"));
     terrain_gen.terrain = terrain.clone();
     commands.spawn((
@@ -468,7 +462,11 @@ fn setup(
     });
 }
 
-fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>) {
+fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, With<Player>>) {
+    let Ok(player) = player_query.single() else {
+        return;
+    };
+    
     let mut gradient = bevy_hanabi::Gradient::new();
     gradient.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
     gradient.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
@@ -476,9 +474,9 @@ fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<Eff
     gradient.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
 
     let mut size_tapering = bevy_hanabi::Gradient::new();
-    size_tapering.add_key(0.0, Vec2::splat(0.4));
-    size_tapering.add_key(0.5, Vec2::splat(0.15));
-    size_tapering.add_key(1.0, Vec2::splat(0.0));
+    size_tapering.add_key(0.0, Vec3::splat(0.4));
+    size_tapering.add_key(0.5, Vec3::splat(0.15));
+    size_tapering.add_key(1.0, Vec3::splat(0.0));
     let mut module = Module::default();
     let accel = module.lit(Vec3::new(0., -3., 0.));
     let update_accel = AccelModifier::new(accel);
@@ -494,11 +492,10 @@ fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<Eff
     let lifetime = module.lit(10.); // literal value "10.0"
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let bottom_thruster = effects.add(
-        EffectAsset::new(32768, SpawnerSettings::rate(1000.0.into()), module)
+        EffectAsset::new(10000, SpawnerSettings::rate(100.0.into()), module)
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
-            .update(update_accel)
             .render(ColorOverLifetimeModifier {
                 gradient: gradient,
                 ..Default::default()
@@ -508,32 +505,23 @@ fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<Eff
                 screen_space_size: false,
                 ..Default::default()
             })
+            .update(update_accel)
     );
-    commands.spawn((
-        Name::new("Thruster_Left"),
-        ParticleEffect::new(bottom_thruster),
-        Transform::from_xyz(0.0, 10.0, 0.0),
+    let thruster_left = commands.spawn((
+        Name::new("Thruster Left"),
+        ParticleEffect::new(bottom_thruster.clone()),
+        Transform::from_xyz(-1.0, 0.5, -1.0),
         BottomThrusterLeft,
-    ));
-    commands.spawn((
-        Name::new("Thruster_Left"),
+    )).id();
+    let thruster_right = commands.spawn((
+        Name::new("Thruster Right"),
         ParticleEffect::new(bottom_thruster),
-        Transform::from_xyz(0.0, 10.0, 0.0),
+        Transform::from_xyz(1.0, 0.5, -1.0),
         BottomThrusterRight,
-    ));
-}
-
-fn particle_effects(player_data: Query<&mut Transform, With<Player>>, mut thruster_left: Query<&mut Transform, With<BottomThrusterLeft>>, mut thruster_right: Query<&mut Transform, With<BottomThrusterRight>>) {
-    let Ok(player_transform) = player_data.single() else {
-        return;
-    };
-    let player_pos = player_transform.translation;
-    for mut transform in thruster_left.iter_mut() {
-        transform.translation = player_pos
-    }
-    for mut transform in thruster_right.iter_mut() {
-        transform.translation = player_pos
-    }
+    )).id();
+    commands
+        .entity(player)
+        .add_children(&[thruster_left, thruster_right]);
 }
 
 pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode: Res<ButtonInput<KeyCode>>) {
@@ -607,7 +595,7 @@ fn main() {
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
-        .add_systems(Startup, (spawn_player, setup, bot_spawn, particle_effects_setup))
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead, particle_effects))
+        .add_systems(Startup, (setup, spawn_player, bot_spawn, particle_effects_setup).chain())
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead))
         .run();
 }
