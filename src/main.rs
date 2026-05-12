@@ -20,6 +20,12 @@ struct Bots;
 #[derive(Component)]
 struct HealthBarUI;
 
+#[derive(Component)]
+struct BottomThrusterLeft;
+
+#[derive(Component)]
+struct BottomThrusterRight;
+
 #[derive(Resource, Default)]
 struct TerrainGen {
     terrain: Handle<Scene>,
@@ -462,27 +468,72 @@ fn setup(
     });
 }
 
-fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>) {
+fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>) {
     let mut gradient = bevy_hanabi::Gradient::new();
     gradient.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
     gradient.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
     gradient.add_key(0.6, Vec4::new(0.0, 0.2, 0.7, 0.5));
     gradient.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
 
-    let mut size_tapering = Gradient::new();
+    let mut size_tapering = bevy_hanabi::Gradient::new();
     size_tapering.add_key(0.0, Vec2::splat(0.4));
-    size_tapering.add_key(0.5, Vec2::slat(0.15));
+    size_tapering.add_key(0.5, Vec2::splat(0.15));
     size_tapering.add_key(1.0, Vec2::splat(0.0));
     let mut module = Module::default();
+    let accel = module.lit(Vec3::new(0., -3., 0.));
+    let update_accel = AccelModifier::new(accel);
+    let init_vel = SetVelocitySphereModifier {
+        center: module.lit(Vec3::ZERO),
+        speed: module.lit(6.),
+    };
+    let init_pos = SetPositionSphereModifier {
+        center: module.lit(Vec3::ZERO),
+        radius: module.lit(2.),
+        dimension: ShapeDimension::Surface,
+    };
+    let lifetime = module.lit(10.); // literal value "10.0"
+    let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let bottom_thruster = effects.add(
         EffectAsset::new(32768, SpawnerSettings::rate(1000.0.into()), module)
-            
+            .init(init_pos)
+            .init(init_vel)
+            .init(init_lifetime)
+            .update(update_accel)
+            .render(ColorOverLifetimeModifier {
+                gradient: gradient,
+                ..Default::default()
+            })
+            .render(SizeOverLifetimeModifier {
+                gradient: size_tapering,
+                screen_space_size: false,
+                ..Default::default()
+            })
     );
     commands.spawn((
-        Name::new("Thrusters"),
+        Name::new("Thruster_Left"),
         ParticleEffect::new(bottom_thruster),
         Transform::from_xyz(0.0, 10.0, 0.0),
+        BottomThrusterLeft,
     ));
+    commands.spawn((
+        Name::new("Thruster_Left"),
+        ParticleEffect::new(bottom_thruster),
+        Transform::from_xyz(0.0, 10.0, 0.0),
+        BottomThrusterRight,
+    ));
+}
+
+fn particle_effects(player_data: Query<&mut Transform, With<Player>>, mut thruster_left: Query<&mut Transform, With<BottomThrusterLeft>>, mut thruster_right: Query<&mut Transform, With<BottomThrusterRight>>) {
+    let Ok(player_transform) = player_data.single() else {
+        return;
+    };
+    let player_pos = player_transform.translation;
+    for mut transform in thruster_left.iter_mut() {
+        transform.translation = player_pos
+    }
+    for mut transform in thruster_right.iter_mut() {
+        transform.translation = player_pos
+    }
 }
 
 pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode: Res<ButtonInput<KeyCode>>) {
@@ -556,7 +607,7 @@ fn main() {
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
-        .add_systems(Startup, (spawn_player, setup, bot_spawn, particle_effects))
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead))
+        .add_systems(Startup, (spawn_player, setup, bot_spawn, particle_effects_setup))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead, particle_effects))
         .run();
 }
