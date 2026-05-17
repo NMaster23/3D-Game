@@ -1,4 +1,4 @@
-use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, math::VectorSpace, post_process::bloom::Bloom, prelude::*, render::view::Hdr, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, math::VectorSpace, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{time::Duration, ops::{Deref, DerefMut}};
 use rand::prelude::*;
@@ -10,6 +10,14 @@ pub struct Lighting;
 
 #[derive(Component)]
 pub struct IsBot;
+
+#[derive(AsBindGroup, Asset, TypePath, Debug, Clone)]
+pub struct JumpIndicator {
+    #[uniform(0)]
+    pub progress: f32,
+    #[uniform(1)]
+    pub color: LinearRgba,
+}
 
 #[derive(Component)]
 struct Crosshair;
@@ -65,6 +73,12 @@ pub struct PlayerData {
 struct Animations {
     animations: Vec<AnimationNodeIndex>,
     graph_handle: Handle<AnimationGraph>,
+}
+
+impl UiMaterial for JumpIndicator {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/jump_indicator.wgsl".into()
+    }
 }
 
 impl Deref for FloatingCrosshair {
@@ -123,6 +137,30 @@ fn botdead(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>) {
             transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
             transform.translation.y = 0.5;
         }
+    }
+}
+
+fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndicator>>) {
+    commands.spawn((
+        MaterialNode(materials.add(JumpIndicator {
+            progress: 0.5,
+            color: LinearRgba::new(0.0, 1.0, 0.5, 0.75),
+        })),
+        Node {
+            width: Val::Px(200.0),
+            height: Val::Px(100.0),
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(30.0),
+            right: Val::Px(30.0),
+            ..Default::default()
+        },
+    ));
+}
+
+fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpIndicator>>) {
+    for (_, material) in materials.iter_mut() {
+        let wave = (time.elapsed_secs() * 1.0).sin();
+        material.progress = wave * 0.5 +0.5;
     }
 }
 
@@ -383,6 +421,12 @@ fn setup(
     asset_server: Res<AssetServer>,
     mut terrain_gen: ResMut<TerrainGen>
 ) {
+    let floor_id = commands.spawn((
+        Collider::cuboid(100.0, 1.0, 100.0),
+        RigidBody::Static,
+        Transform::from_xyz(0.0, -5.0, 0.0)
+    )).id();
+    terrain_gen.loading_collision = Some(floor_id);
     let terrain = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment/Terrain.glb"));
     terrain_gen.terrain = terrain.clone();
     commands.spawn((
@@ -462,11 +506,10 @@ fn setup(
     });
 }
 
-fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, With<Player>>) {
+fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>) {
     let Ok(player) = player_query.single() else {
         return;
     };
-    
     let mut gradient = bevy_hanabi::Gradient::new();
     gradient.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
     gradient.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
@@ -474,25 +517,25 @@ fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<Eff
     gradient.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
 
     let mut size_tapering = bevy_hanabi::Gradient::new();
-    size_tapering.add_key(0.0, Vec3::splat(0.4));
-    size_tapering.add_key(0.5, Vec3::splat(0.15));
+    size_tapering.add_key(0.0, Vec3::splat(0.2));
+    size_tapering.add_key(0.5, Vec3::splat(0.075));
     size_tapering.add_key(1.0, Vec3::splat(0.0));
     let mut module = Module::default();
     let accel = module.lit(Vec3::new(0., -3., 0.));
     let update_accel = AccelModifier::new(accel);
     let init_vel = SetVelocitySphereModifier {
         center: module.lit(Vec3::ZERO),
-        speed: module.lit(6.),
+        speed: module.lit(1.5),
     };
     let init_pos = SetPositionSphereModifier {
         center: module.lit(Vec3::ZERO),
-        radius: module.lit(2.),
+        radius: module.lit(0.15),
         dimension: ShapeDimension::Surface,
     };
-    let lifetime = module.lit(10.); // literal value "10.0"
+    let lifetime = module.lit(0.1); // literal value "0.1"
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let bottom_thruster = effects.add(
-        EffectAsset::new(10000, SpawnerSettings::rate(100.0.into()), module)
+        EffectAsset::new(63000, SpawnerSettings::rate(1000.0.into()), module)
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
@@ -510,18 +553,33 @@ fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<Eff
     let thruster_left = commands.spawn((
         Name::new("Thruster Left"),
         ParticleEffect::new(bottom_thruster.clone()),
-        Transform::from_xyz(-1.0, 0.5, -1.0),
+        Transform::from_xyz(-0.3, -1.5, 0.0),
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
         BottomThrusterLeft,
     )).id();
     let thruster_right = commands.spawn((
         Name::new("Thruster Right"),
         ParticleEffect::new(bottom_thruster),
-        Transform::from_xyz(1.0, 0.5, -1.0),
+        Transform::from_xyz(0.3, -1.5, 0.0),
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
         BottomThrusterRight,
     )).id();
     commands
         .entity(player)
         .add_children(&[thruster_left, thruster_right]);
+}
+
+fn particle_effects(keycode: Res<ButtonInput<KeyCode>>, mut spawners: Query<&mut EffectSpawner, Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
+    let jumping = keycode.just_pressed(KeyCode::Space);
+    for spawner in &mut spawners {
+        spawner.with_active(jumping);
+    }
 }
 
 pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode: Res<ButtonInput<KeyCode>>) {
@@ -556,7 +614,7 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, crosshair: Res<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
+fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
     if !mouse_button.pressed(MouseButton::Left) { return; }
     let Ok(mut player_transform) = player_query.single_mut() else {
         return;
@@ -570,6 +628,7 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
         camera_ray.origin + *camera_ray.direction * 100.0
     };
     let crosshair_pos = Vec3::new(crosshair.x, 0.0, crosshair.y);
+    crosshair.y -= 200.0;
     let forward = -player_transform.forward();
     let ray_pos = player_transform.translation + *forward * 2.25;
     let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
@@ -595,7 +654,9 @@ fn main() {
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
-        .add_systems(Startup, (setup, spawn_player, bot_spawn, particle_effects_setup).chain())
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead))
+        .add_systems(Startup, (spawn_player, setup))
+        .add_systems(Startup, (bot_spawn, particle_effects_setup))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead, particle_effects_setup, particle_effects))
+        
         .run();
 }
