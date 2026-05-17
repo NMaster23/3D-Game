@@ -15,7 +15,15 @@ pub struct IsBot;
 pub struct JumpIndicator {
     #[uniform(0)]
     pub progress: f32,
-    #[uniform(1)]
+    #[uniform(0)]
+    pub color: LinearRgba,
+}
+
+#[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
+pub struct HealthBarUI {
+    #[uniform(0)]
+    pub progress: f32,
+    #[uniform(0)]
     pub color: LinearRgba,
 }
 
@@ -24,9 +32,6 @@ struct Crosshair;
 
 #[derive(Component)]
 struct Bots;
-
-#[derive(Component)]
-struct HealthBarUI;
 
 #[derive(Component)]
 struct BottomThrusterLeft;
@@ -78,6 +83,12 @@ struct Animations {
 impl UiMaterial for JumpIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/jump_indicator.wgsl".into()
+    }
+}
+
+impl UiMaterial for HealthBarUI {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/health_bar.wgsl".into()
     }
 }
 
@@ -147,8 +158,8 @@ fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndic
             color: LinearRgba::new(0.0, 1.0, 0.5, 0.75),
         })),
         Node {
-            width: Val::Px(200.0),
-            height: Val::Px(100.0),
+            width: Val::Px(150.0),
+            height: Val::Px(150.0),
             position_type: PositionType::Absolute,
             bottom: Val::Px(30.0),
             right: Val::Px(30.0),
@@ -157,10 +168,17 @@ fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndic
     ));
 }
 
-fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpIndicator>>) {
-    for (_, material) in materials.iter_mut() {
-        let wave = (time.elapsed_secs() * 1.0).sin();
-        material.progress = wave * 0.5 +0.5;
+fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpIndicator>>, mut query: Query<(&mut PlayerData), With<Player>>) {
+    if let Ok(player) = query.single() {
+        for (_, material) in materials.iter_mut() {
+            if player.jumps == 0 {
+                player.jump_timer.fraction();
+                material.color = LinearRgba::new(1.0, 0.2, 0.2, 0.75);
+            } else {
+                material.progress = player.jumps as f32 / 2.0;
+                material.color = LinearRgba::new(0.0, 1.0, 0.5, 0.75);
+            }
+        }
     }
 }
 
@@ -190,7 +208,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         Player,
         RigidBody::Dynamic,
         SceneRoot(player_model),
-        Collider::capsule(1.0, 3.0),
+        Collider::capsule(1.0, 1.5),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
             health: 100,
@@ -224,7 +242,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
             GlobalTransform::default(),
             Bots,
             RigidBody::Dynamic,
-            Collider::capsule(1.0, 3.0),
+            Collider::capsule(1.0, 1.5),
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player/Player.glb"))),
             BotData {
                 health: hits,
@@ -482,7 +500,8 @@ fn setup(
         justify_content: JustifyContent::Center,
         padding: UiRect::bottom(Val::Px(40.0)),
         ..default()
-    }).with_children(|parent| {
+    });
+/*     .with_children(|parent| {
         parent.spawn((
             Node {
                 width: Val::Px(400.0),
@@ -492,7 +511,8 @@ fn setup(
             },
             BackgroundColor(Color::BLACK),
             BorderColor::all(Color::WHITE)
-        )).with_children(|background| {
+        ))
+        .with_children(|background| {
             background.spawn((
                 Node {
                     width: Val::Percent(100.0),
@@ -501,9 +521,9 @@ fn setup(
                 },
                 BackgroundColor(Color::srgb(0.2, 0.8, 0.2)),
                 HealthBarUI,
-            ));
-        });
-    });
+            )); */
+    //    });
+   // });
 }
 
 fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>) {
@@ -649,14 +669,15 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(HanabiPlugin)
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup))
-        .add_systems(Startup, (bot_spawn, particle_effects_setup))
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead, particle_effects_setup, particle_effects))
+        .add_systems(Startup, (bot_spawn, jump_indicator))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead, particle_effects_setup, particle_effects, jump_indicator_handling))
         
         .run();
 }
