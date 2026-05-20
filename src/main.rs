@@ -742,24 +742,28 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
     ray_handling(ray_pos, dir, time, ray_cast, &mut gizmos, query, parent);
 }
 
-fn muzzle_flash(entity: Entity, mut commands: Commands, mut materials: ResMut<Assets<MuzzleFlash>>) {
-    let flash = materials.add(MuzzleFlash {
-        power: 1.0,
-        color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
-    });
-    commands.entity(entity).with_children(|parent| {
-        parent.spawn((
-            MaterialNode(flash),
-            Node {
-                width: Val::Px(200.0),
-                height: Val::Px(200.0),
-                position_type: PositionType::Absolute,
-                left: Val::Px(-100.0),
-                top: Val::Px(-100.0),
-                ..default()
-            },
-        ));
-    });
+fn muzzle_flash(mouse_button: Res<ButtonInput<MouseButton>>, mut commands: Commands, mut materials: ResMut<Assets<MuzzleFlash>>, player_query: Query<Entity, With<Player>>) {
+    if mouse_button.just_pressed(MouseButton::Left) {
+        if let Ok(player_entity) = player_query.single() {
+            let flash = materials.add(MuzzleFlash {
+                power: 1.0,
+                color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
+            });
+            commands.entity(player_entity).with_children(|parent| {
+                parent.spawn((
+                    MaterialNode(flash),
+                    Node {
+                        width: Val::Px(200.0),
+                        height: Val::Px(200.0),
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(-100.0),
+                        top: Val::Px(-100.0),
+                        ..default()
+                    },
+                ));
+            });
+        }
+    }
 }
 
 fn main() {
@@ -787,6 +791,26 @@ fn main() {
         .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup, gun_select_setup))
         .add_systems(Startup, (bot_spawn, jump_indicator, health_bar))
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, mesh_load_check, shooting, botdead, particle_effects_setup, particle_effects, jump_indicator_handling, health_bar_handling, gun_select_handling, muzzle_flash))
+        .add_systems(
+            Update,
+            (
+                player_movement,
+                setup_scene_once_loaded,
+                movement_animations,
+                camera_positioning,
+                setup_lighting,
+                bot_handling,
+                cursor_handling,
+                mesh_load_check,
+                shooting,
+                botdead,
+                particle_effects_setup,
+                particle_effects,
+                jump_indicator_handling,
+                health_bar_handling,
+                gun_select_handling,
+                muzzle_flash,
+            ),
+        )
         .run();
 }
