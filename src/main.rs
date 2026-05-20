@@ -1,9 +1,10 @@
-use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, math::VectorSpace, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{time::Duration, ops::{Deref, DerefMut}};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 use bevy_hanabi::*;
+use std::thread::sleep;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -154,29 +155,59 @@ fn botdead(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>) {
 fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndicator>>) {
     commands.spawn((
         MaterialNode(materials.add(JumpIndicator {
-            progress: 0.5,
-            color: LinearRgba::new(0.0, 1.0, 0.5, 0.75),
+            progress: 1.0,
+            color: LinearRgba::new(1.0, 1.0, 1.0, 0.75),
         })),
         Node {
-            width: Val::Px(150.0),
-            height: Val::Px(150.0),
+            width: Val::Px(200.0),
+            height: Val::Px(1000.0),
             position_type: PositionType::Absolute,
-            bottom: Val::Px(30.0),
+            bottom: Val::Px(100.0),
             right: Val::Px(30.0),
             ..Default::default()
         },
     ));
 }
 
-fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpIndicator>>, mut query: Query<(&mut PlayerData), With<Player>>) {
+fn health_bar(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>) {
+    commands.spawn((
+        MaterialNode(materials.add(HealthBarUI {
+            progress: 1.0,
+            color: LinearRgba::new(0.2, 0.8, 0.2, 1.0),
+        })),
+        Node {
+            width: Val::Px(200.0),
+            height: Val::Px(1000.0),
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(100.0),
+            left: Val::Px(30.0),
+            ..Default::default()
+        },
+        HealthBarUI {
+            progress: 1.0,
+            color: LinearRgba::new(0.2, 0.8, 0.2, 1.0),
+        },
+    ));
+}
+
+fn health_bar_handling(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>, query: Query<&PlayerData, With<Player>>) {
+    if let Ok(player) = query.single() {
+        for (_, material) in materials.iter_mut() {
+            material.progress = (player.health as f32 / 5.0).clamp(0.0, 1.0);
+            material.color = LinearRgba::new(0.2, 0.8, 0.2, 1.0);
+        }
+    }
+}
+
+fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpIndicator>>, query: Query<&PlayerData, With<Player>>) {
     if let Ok(player) = query.single() {
         for (_, material) in materials.iter_mut() {
             if player.jumps == 0 {
-                player.jump_timer.fraction();
-                material.color = LinearRgba::new(1.0, 0.2, 0.2, 0.75);
+                material.progress = player.jump_timer.fraction();
+                material.color = LinearRgba::new(0.6, 0.6, 0.6, 0.8); // Dimmer white while recharging
             } else {
                 material.progress = player.jumps as f32 / 2.0;
-                material.color = LinearRgba::new(0.0, 1.0, 0.5, 0.75);
+                material.color = LinearRgba::new(1.0, 1.0, 1.0, 0.9); // Bright white when ready
             }
         }
     }
@@ -501,29 +532,6 @@ fn setup(
         padding: UiRect::bottom(Val::Px(40.0)),
         ..default()
     });
-/*     .with_children(|parent| {
-        parent.spawn((
-            Node {
-                width: Val::Px(400.0),
-                height: Val::Px(30.0),
-                border: UiRect::all(Val::Px(2.0)),
-                ..default()
-            },
-            BackgroundColor(Color::BLACK),
-            BorderColor::all(Color::WHITE)
-        ))
-        .with_children(|background| {
-            background.spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    ..default()
-                },
-                BackgroundColor(Color::srgb(0.2, 0.8, 0.2)),
-                HealthBarUI,
-            )); */
-    //    });
-   // });
 }
 
 fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>) {
@@ -599,6 +607,8 @@ fn particle_effects(keycode: Res<ButtonInput<KeyCode>>, mut spawners: Query<&mut
     let jumping = keycode.just_pressed(KeyCode::Space);
     for spawner in &mut spawners {
         spawner.with_active(jumping);
+        sleep(Duration::from_millis(100));
+        spawner.with_active(!jumping);
     }
 }
 
@@ -610,13 +620,6 @@ pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode
                 _ => Visibility::Hidden,
             }
         }
-    }
-}
-
-fn health_bar(player_query: Query<&PlayerData, With<Player>>, mut bar_query: Query<&mut Node, With<HealthBarUI>>) {
-    if let (Ok(player), Ok(mut node)) = (player_query.single(), bar_query.single_mut()) {
-        let health_percent = (player.health as f32 / 5.0) * 100.0;
-        node.width = Val::Percent(health_percent.clamp(0.0, 100.0))
     }
 }
 
@@ -670,14 +673,15 @@ fn main() {
             ..default()
         }))
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
+        .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
         .add_plugins(HanabiPlugin)
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup))
-        .add_systems(Startup, (bot_spawn, jump_indicator))
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, health_bar, mesh_load_check, shooting, botdead, particle_effects_setup, particle_effects, jump_indicator_handling))
+        .add_systems(Startup, (bot_spawn, jump_indicator, health_bar))
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, mesh_load_check, shooting, botdead, particle_effects_setup, particle_effects, jump_indicator_handling, health_bar_handling))
         
         .run();
 }
