@@ -86,6 +86,7 @@ pub struct PlayerData {
 
 #[derive(Asset, TypePath, Debug, Clone)]
 struct WeaponData {
+    id: u32,
     name: String,
     damage: i32,
     range: f32,
@@ -93,9 +94,9 @@ struct WeaponData {
     power: f32,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct SelectedWeapon {
-    selected_id: f32,
+    pub id: u32,
 }
 
 #[derive(Resource)]
@@ -244,6 +245,7 @@ fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpInd
 
 fn gun_select_setup(mut weapons: ResMut<Assets<WeaponData>>, mut commands: Commands) {
     weapons.add(WeaponData {
+        id: 0,
         name: "Pistol".into(),
         damage: 10,
         range: 50.0,
@@ -251,6 +253,7 @@ fn gun_select_setup(mut weapons: ResMut<Assets<WeaponData>>, mut commands: Comma
         power: 1.0,
     });
     weapons.add(WeaponData {
+        id: 1,
         name: "Rifle".into(),
         damage: 5,
         range: 100.0,
@@ -258,6 +261,7 @@ fn gun_select_setup(mut weapons: ResMut<Assets<WeaponData>>, mut commands: Comma
         power: 0.5,
     });
     weapons.add(WeaponData {
+        id: 2,
         name: "Shotgun".into(),
         damage: 20,
         range: 30.0,
@@ -265,6 +269,7 @@ fn gun_select_setup(mut weapons: ResMut<Assets<WeaponData>>, mut commands: Comma
         power: 2.0,
     });
     weapons.add(WeaponData {
+        id: 3,
         name: "Missile Launcher".into(),
         damage: 50,
         range: 200.0,
@@ -273,18 +278,22 @@ fn gun_select_setup(mut weapons: ResMut<Assets<WeaponData>>, mut commands: Comma
     });
 }
 
-fn gun_select_handling(weapons: Res<Assets<WeaponData>>, mut selected: ResMut<SelectedWeapon>, keycode: Res<ButtonInput<KeyCode>>) {
-    if keycode.just_pressed(KeyCode::Key1) {
-        selected.selected_id = 0.0;
+fn gun_select_handling(mut selected: ResMut<SelectedWeapon>, keycode: Res<ButtonInput<KeyCode>>) {
+    if keycode.just_pressed(KeyCode::Digit1) {
+        selected.id = 0;
+        println!("Selected Pistol");
     }
-    if keycode.just_pressed(KeyCode::Key2) {
-        selected.selected_id = 1.0;
+    if keycode.just_pressed(KeyCode::Digit2) {
+        selected.id = 1;
+        println!("Selected Rifle");
     }
-    if keycode.just_pressed(KeyCode::Key3) {
-        selected.selected_id = 2.0;
+    if keycode.just_pressed(KeyCode::Digit3) {
+        selected.id = 2;
+        println!("Selected Shotgun");
     }
-    if keycode.just_pressed(KeyCode::Key4) {
-        selected.selected_id = 3.0;
+    if keycode.just_pressed(KeyCode::Digit4) {
+        selected.id = 3;
+        println!("Selected Missile Launcher");
     }
 }
 
@@ -770,13 +779,14 @@ fn main() {
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
         .add_plugins(HanabiPlugin)
+        .init_asset::<WeaponData>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
+        .init_resource::<SelectedWeapon>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
-        .add_systems(Startup, (spawn_player, setup))
+        .add_systems(Startup, (spawn_player, setup, gun_select_setup))
         .add_systems(Startup, (bot_spawn, jump_indicator, health_bar))
-        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, mesh_load_check, shooting, botdead, particle_effects_setup, particle_effects, jump_indicator_handling, health_bar_handling))
-        
+        .add_systems(Update, (player_movement, setup_scene_once_loaded, movement_animations, camera_positioning, setup_lighting, bot_handling, cursor_handling, mesh_load_check, shooting, botdead, particle_effects_setup, particle_effects, jump_indicator_handling, health_bar_handling, gun_select_handling, muzzle_flash))
         .run();
 }
