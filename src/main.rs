@@ -1,10 +1,11 @@
 use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
-use std::{time::Duration, ops::{Deref, DerefMut}};
+use std::{collections::HashMap, ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 use bevy_hanabi::*;
 use std::thread::sleep;
+use std::io;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -24,6 +25,14 @@ pub struct JumpIndicator {
 pub struct HealthBarUI {
     #[uniform(0)]
     pub progress: f32,
+    #[uniform(0)]
+    pub color: LinearRgba,
+}
+
+#[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
+pub struct MuzzleFlash {
+    #[uniform(0)]
+    pub power: f32,
     #[uniform(0)]
     pub color: LinearRgba,
 }
@@ -75,6 +84,20 @@ pub struct PlayerData {
     jump_timer: Timer,
 }
 
+#[derive(Asset, TypePath, Debug, Clone)]
+struct WeaponData {
+    name: String,
+    damage: i32,
+    range: f32,
+    fire_rate: f32,
+    power: f32,
+}
+
+#[derive(Resource)]
+struct SelectedWeapon {
+    selected_id: f32,
+}
+
 #[derive(Resource)]
 struct Animations {
     animations: Vec<AnimationNodeIndex>,
@@ -90,6 +113,12 @@ impl UiMaterial for JumpIndicator {
 impl UiMaterial for HealthBarUI {
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/health_bar.wgsl".into()
+    }
+}
+
+impl UiMaterial for MuzzleFlash {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/muzzle_flash.wgsl".into()
     }
 }
 
@@ -159,10 +188,10 @@ fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndic
             color: LinearRgba::new(1.0, 1.0, 1.0, 0.75),
         })),
         Node {
-            width: Val::Px(200.0),
+            width: Val::Px(1000.0),
             height: Val::Px(1000.0),
             position_type: PositionType::Absolute,
-            bottom: Val::Px(100.0),
+            bottom: Val::Px(50.0),
             right: Val::Px(30.0),
             ..Default::default()
         },
@@ -176,10 +205,10 @@ fn health_bar(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>
             color: LinearRgba::new(0.2, 0.8, 0.2, 1.0),
         })),
         Node {
-            width: Val::Px(200.0),
+            width: Val::Px(1000.0),
             height: Val::Px(1000.0),
             position_type: PositionType::Absolute,
-            bottom: Val::Px(100.0),
+            bottom: Val::Px(50.0),
             left: Val::Px(30.0),
             ..Default::default()
         },
@@ -210,6 +239,52 @@ fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpInd
                 material.color = LinearRgba::new(1.0, 1.0, 1.0, 0.9); // Bright white when ready
             }
         }
+    }
+}
+
+fn gun_select_setup(mut weapons: ResMut<Assets<WeaponData>>, mut commands: Commands) {
+    weapons.add(WeaponData {
+        name: "Pistol".into(),
+        damage: 10,
+        range: 50.0,
+        fire_rate: 0.5,
+        power: 1.0,
+    });
+    weapons.add(WeaponData {
+        name: "Rifle".into(),
+        damage: 5,
+        range: 100.0,
+        fire_rate: 0.1,
+        power: 0.5,
+    });
+    weapons.add(WeaponData {
+        name: "Shotgun".into(),
+        damage: 20,
+        range: 30.0,
+        fire_rate: 1.0,
+        power: 2.0,
+    });
+    weapons.add(WeaponData {
+        name: "Missile Launcher".into(),
+        damage: 50,
+        range: 200.0,
+        fire_rate: 2.0,
+        power: 5.0,
+    });
+}
+
+fn gun_select_handling(weapons: Res<Assets<WeaponData>>, mut selected: ResMut<SelectedWeapon>, keycode: Res<ButtonInput<KeyCode>>) {
+    if keycode.just_pressed(KeyCode::Key1) {
+        selected.selected_id = 0.0;
+    }
+    if keycode.just_pressed(KeyCode::Key2) {
+        selected.selected_id = 1.0;
+    }
+    if keycode.just_pressed(KeyCode::Key3) {
+        selected.selected_id = 2.0;
+    }
+    if keycode.just_pressed(KeyCode::Key4) {
+        selected.selected_id = 3.0;
     }
 }
 
@@ -656,6 +731,26 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
     let ray_pos = player_transform.translation + *forward * 2.25;
     let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
     ray_handling(ray_pos, dir, time, ray_cast, &mut gizmos, query, parent);
+}
+
+fn muzzle_flash(entity: Entity, mut commands: Commands, mut materials: ResMut<Assets<MuzzleFlash>>) {
+    let flash = materials.add(MuzzleFlash {
+        power: 1.0,
+        color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
+    });
+    commands.entity(entity).with_children(|parent| {
+        parent.spawn((
+            MaterialNode(flash),
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(200.0),
+                position_type: PositionType::Absolute,
+                left: Val::Px(-100.0),
+                top: Val::Px(-100.0),
+                ..default()
+            },
+        ));
+    });
 }
 
 fn main() {
