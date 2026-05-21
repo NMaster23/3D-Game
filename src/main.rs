@@ -99,6 +99,9 @@ struct SelectedWeapon {
     pub id: u32,
 }
 
+#[derive(Component)]
+struct DespawnTimer(Timer);
+
 #[derive(Resource)]
 struct Animations {
     animations: Vec<AnimationNodeIndex>,
@@ -404,14 +407,15 @@ fn bot_handling(
             if f_dir.length_squared() > 0.0 {
                 t.rotation = t.rotation.slerp(Quat::from_rotation_y(f_dir.x.atan2(f_dir.z)), time.delta_secs() * 5.0);
             }
-            let rand_number = rand::rng().random_range(1..500);            
             lv.x = c.move_direction.x + rand::rng().random_range(-5.0..5.0);
             lv.z = c.move_direction.z + rand::rng().random_range(-5.0..5.0);
-            if rand_number == b.hit_number {
-                let Ok(player_entity) = p_entity.single() else { continue; };
-                let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
-                let ray = Ray3d::new(t.translation, ray_dir);
-                let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
+            let Ok(player_entity) = p_entity.single() else { continue; };
+            let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
+            let ray = Ray3d::new(t.translation, ray_dir);
+            let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
+            let hit_number = 69;
+            let hit_chance = rand::rng().random_range(1..250);
+            if hit_number == hit_chance {
                 for (hit_entity, hit_data) in hits {
                     let mut current_entity = *hit_entity;
                     let mut hit_self = false;
@@ -454,15 +458,28 @@ fn bot_handling(
                                 left: Val::Percent(45.0),
                                 ..default()
                             },
+                            DespawnTimer(Timer::from_seconds(0.1, TimerMode::Once)),
                         ));
                     }
                     break;
                 }
+            } else {
+                println!("Dead")
             }
-        } else {
-            println!("Dead")
         }
     }
+}
+
+fn despawn_ray(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut DespawnTimer)>) {
+    for (e, mut t) in q.iter_mut() {
+        if t.0.tick(time.delta()).just_finished() {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+fn targeting_disruptor() {
+    
 }
 
 fn setup_scene_once_loaded(
@@ -817,6 +834,7 @@ fn muzzle_flash(mouse_button: Res<ButtonInput<MouseButton>>, mut commands: Comma
                     right: Val::Px(250.0),
                     ..default()
                 },
+                DespawnTimer(Timer::from_seconds(0.1, TimerMode::Once)),
             ));
         }
     }
@@ -867,6 +885,7 @@ fn main() {
                 health_bar_handling,
                 gun_select_handling,
                 muzzle_flash,
+                despawn_ray,
             ),
         )
         .run();
