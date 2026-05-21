@@ -223,9 +223,11 @@ fn health_bar(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>
 fn health_bar_handling(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>, query: Query<&PlayerData, With<Player>>) {
     if let Ok(player) = query.single() {
         for (_, material) in materials.iter_mut() {
-            let progress = (player.health as f32 / 25.0).clamp(0.0, 1.0);
+            let progress = (player.health as f32 / 100.0).clamp(0.0, 1.0);
             material.progress = progress;
-            material.color = LinearRgba::new(1.0 - progress, progress, 0.2, 1.0); // Transitions from green to red!
+            let red = ((1.0 - progress) * 2.0).clamp(0.0, 1.0);
+            let green = progress;
+            material.color = LinearRgba::new(red, green, 0.1, 1.0);
         }
     }
 }
@@ -235,10 +237,10 @@ fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpInd
         for (_, material) in materials.iter_mut() {
             if player.jumps == 0 {
                 material.progress = player.jump_timer.fraction();
-                material.color = LinearRgba::new(0.6, 0.6, 0.6, 0.8); // Dimmer white while recharging
+                material.color = LinearRgba::new(0.6, 0.6, 0.6, 0.8);
             } else {
                 material.progress = player.jumps as f32 / 2.0;
-                material.color = LinearRgba::new(1.0, 1.0, 1.0, 0.9); // Bright white when ready
+                material.color = LinearRgba::new(1.0, 1.0, 1.0, 0.9);
             }
         }
     }
@@ -327,7 +329,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         Collider::capsule(1.0, 1.5),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
-            health: 25,
+            health: 100,
             player_name: "Admin".into(),
             player_id: 1,
             jumps: 2,
@@ -408,40 +410,54 @@ fn bot_handling(
             if rand_number == b.hit_number {
                 let Ok(player_entity) = p_entity.single() else { continue; };
                 let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
-                let ray_origin = t.translation + *ray_dir * 2.0; // Start outside the bot so it doesn't shoot itself
-                let ray = Ray3d::new(ray_origin, ray_dir);
-                if let Some((hit_entity, hit_data)) = ray_cast.cast_ray(ray, &MeshRayCastSettings::default()).first() {
-                    gizmos.line(ray_origin, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
+                let ray = Ray3d::new(t.translation, ray_dir);
+                let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
+                for (hit_entity, hit_data) in hits {
                     let mut current_entity = *hit_entity;
+                    let mut hit_self = false;
+                    let mut hit_player = false;
                     loop {
                         if current_entity == player_entity {
-                            pd.health -= 1;
+                            hit_player = true;
+                            pd.health -= 4;
                             println!("Player hit! Health: {}", pd.health);
                             break;
                         }
+                        if current_entity == e {
+                            hit_self = true;
+                            break;
+                        }
                         if let Ok(parent) = parents.get(current_entity) {
-                            current_entity = parent.0; // Walk up the hierarchy to find the root player entity
+                            current_entity = parent.0;
                         } else {
                             break;
                         }
                     }
+                    if hit_self {
+                        continue;
+                    }
+                    if hit_player {
+                        gizmos.line(t.translation, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
+                        pd.health -= 4;
+                        println!("Player hit! Health: {}", pd.health);
+                        let flash = materials.add(MuzzleFlash {
+                            power: 1.0,
+                            color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
+                        });
+                        commands.spawn((
+                            MaterialNode(flash),
+                            Node {
+                                width: Val::Px(200.0),
+                                height: Val::Px(200.0),
+                                position_type: PositionType::Absolute,
+                                top: Val::Px(50.0),
+                                left: Val::Percent(45.0),
+                                ..default()
+                            },
+                        ));
+                    }
+                    break;
                 }
-                let flash = materials.add(MuzzleFlash {
-                    power: 1.0,
-                    color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
-                });
-                commands.spawn((
-                    MaterialNode(flash),
-                    Node {
-                        width: Val::Px(200.0),
-                        height: Val::Px(200.0),
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(50.0),
-                        left: Val::Percent(45.0),
-                        ..default()
-                    },
-                ));
-                println!("Hit")
             }
         } else {
             println!("Dead")
@@ -456,7 +472,6 @@ fn setup_scene_once_loaded(
 ) {
     for (entity, mut player) in &mut players {
         let mut transitions = AnimationTransitions::new();
-        // directly via the `AnimationPlayer`.
         transitions
             .play(&mut player, animations.animations[0], Duration::ZERO)
             .repeat();
@@ -632,7 +647,6 @@ fn setup(
             Crosshair,
         ));
     });
-    // camera
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -688,7 +702,7 @@ fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<Eff
         radius: module.lit(0.15),
         dimension: ShapeDimension::Surface,
     };
-    let lifetime = module.lit(0.1); // literal value "0.1"
+    let lifetime = module.lit(0.1);
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let bottom_thruster = effects.add(
         EffectAsset::new(63000, SpawnerSettings::rate(1000.0.into()), module)
