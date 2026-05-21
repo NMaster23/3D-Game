@@ -62,6 +62,7 @@ struct BotData {
     bot_quantity: u32,
     bot_offset: f32,
     hit_number: i32,
+    fire_timer: Timer,
 }
 
 #[derive(Component)]
@@ -355,7 +356,8 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
         bot_id: 1,
         bot_quantity: bot_number,
         bot_offset: 0.0,
-        hit_number: hits_num
+        hit_number: hits_num,
+        fire_timer: Timer::from_seconds(1.0, TimerMode::Repeating),
     };
     for i in 0..bots.bot_quantity {
         bots.bot_offset = i as f32 * bots.bot_quantity as f32 - 10.0;
@@ -371,6 +373,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
                 bot_quantity: bots.bot_quantity,
                 bot_offset: i as f32 * 2.0 - (bots.bot_quantity as f32 - 1.0) * 2.0 / 2.0,
                 hit_number: hits_num,
+                fire_timer: Timer::from_seconds(rand::rng().random_range(1.5..2.0), TimerMode::Repeating),
             },
             IsBot,
             Transform::from_xyz(bots.bot_offset, 10.0, -5.0),
@@ -388,14 +391,14 @@ fn bot_handling(
     mut materials: ResMut<Assets<MuzzleFlash>>,
     mut ray_cast: MeshRayCast,
     mut gizmos: Gizmos,
-    mut q: Query<(Entity, &mut Transform, &mut CharacterController, &BotData, &mut LinearVelocity), (With<Bots>, Without<Player>)>,
+    mut q: Query<(Entity, &mut Transform, &mut CharacterController, &mut BotData, &mut LinearVelocity), (With<Bots>, Without<Player>)>,
     mut p: Query<(&Transform, &mut PlayerData), With<Player>>,
     p_entity: Query<Entity, With<Player>>,
     parents: Query<&ChildOf>,
 ) {
     let Ok((pt, mut pd)) = p.single_mut() else { return; };
     let pos: Vec<_> = q.iter().map(|(e, t, _, _, _)| (e, t.translation)).collect();
-    for (e, mut t, mut c, b, mut lv) in q.iter_mut() {
+    for (e, mut t, mut c, mut b, mut lv) in q.iter_mut() {
         if b.health >= 0 {
             let dir = (pt.translation - t.translation).normalize_or_zero();
             let sep: Vec3 = pos.iter().filter(|(oe, _)| e != *oe).filter_map(|(_, ot)| {
@@ -410,61 +413,61 @@ fn bot_handling(
             lv.x = c.move_direction.x + rand::rng().random_range(-5.0..5.0);
             lv.z = c.move_direction.z + rand::rng().random_range(-5.0..5.0);
             let Ok(player_entity) = p_entity.single() else { continue; };
-            let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
-            let ray = Ray3d::new(t.translation, ray_dir);
-            let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
-            let hit_number = 69;
-            let hit_chance = rand::rng().random_range(1..250);
-            if hit_number == hit_chance {
-                for (hit_entity, hit_data) in hits {
-                    let mut current_entity = *hit_entity;
-                    let mut hit_self = false;
-                    let mut hit_player = false;
-                    loop {
-                        if current_entity == player_entity {
-                            hit_player = true;
+            if b.fire_timer.tick(time.delta()).just_finished() {
+                let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
+                let ray = Ray3d::new(t.translation, ray_dir);
+                let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
+                let hit_number = 69;
+                let hit_chance = rand::rng().random_range(1..250);
+                if hit_number == hit_chance {
+                    for (hit_entity, hit_data) in hits {
+                        let mut current_entity = *hit_entity;
+                        let mut hit_self = false;
+                        let mut hit_player = false;
+                        loop {
+                            if current_entity == player_entity {
+                                hit_player = true;
+                                pd.health -= 4;
+                                println!("Player hit! Health: {}", pd.health);
+                                break;
+                            }
+                            if current_entity == e {
+                                hit_self = true;
+                                break;
+                            }
+                            if let Ok(parent) = parents.get(current_entity) {
+                                current_entity = parent.0;
+                            } else {
+                                break;
+                            }
+                        }
+                        if hit_self {
+                            continue;
+                        }
+                        if hit_player {
+                            gizmos.line(t.translation, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
                             pd.health -= 4;
                             println!("Player hit! Health: {}", pd.health);
-                            break;
+                            let flash = materials.add(MuzzleFlash {
+                                power: 1.0,
+                                color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
+                            });
+                            commands.spawn((
+                                MaterialNode(flash),
+                                Node {
+                                    width: Val::Px(200.0),
+                                    height: Val::Px(200.0),
+                                    position_type: PositionType::Absolute,
+                                    top: Val::Px(50.0),
+                                    left: Val::Percent(45.0),
+                                    ..default()
+                                },
+                                DespawnTimer(Timer::from_seconds(0.1, TimerMode::Once)),
+                            ));
                         }
-                        if current_entity == e {
-                            hit_self = true;
-                            break;
-                        }
-                        if let Ok(parent) = parents.get(current_entity) {
-                            current_entity = parent.0;
-                        } else {
-                            break;
-                        }
+                        break;
                     }
-                    if hit_self {
-                        continue;
-                    }
-                    if hit_player {
-                        gizmos.line(t.translation, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
-                        pd.health -= 4;
-                        println!("Player hit! Health: {}", pd.health);
-                        let flash = materials.add(MuzzleFlash {
-                            power: 1.0,
-                            color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
-                        });
-                        commands.spawn((
-                            MaterialNode(flash),
-                            Node {
-                                width: Val::Px(200.0),
-                                height: Val::Px(200.0),
-                                position_type: PositionType::Absolute,
-                                top: Val::Px(50.0),
-                                left: Val::Percent(45.0),
-                                ..default()
-                            },
-                            DespawnTimer(Timer::from_seconds(0.1, TimerMode::Once)),
-                        ));
-                    }
-                    break;
                 }
-            } else {
-                println!("Dead")
             }
         }
     }
@@ -478,7 +481,11 @@ fn despawn_ray(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &m
     }
 }
 
-fn targeting_disruptor() {
+fn targeting_disruptor(keycode: Res<ButtonInput<KeyCode>>) {
+    if !keycode.just_pressed(KeyCode::KeyT) {
+        return;
+    }
+    println!("Targeting Disruptor Activated! Bot accuracy has been reduced for 5 seconds.");
     
 }
 
