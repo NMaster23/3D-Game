@@ -223,8 +223,9 @@ fn health_bar(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>
 fn health_bar_handling(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>, query: Query<&PlayerData, With<Player>>) {
     if let Ok(player) = query.single() {
         for (_, material) in materials.iter_mut() {
-            material.progress = (player.health as f32 / 5.0).clamp(0.0, 1.0);
-            material.color = LinearRgba::new(0.2, 0.8, 0.2, 1.0);
+            let progress = (player.health as f32 / 25.0).clamp(0.0, 1.0);
+            material.progress = progress;
+            material.color = LinearRgba::new(1.0 - progress, progress, 0.2, 1.0); // Transitions from green to red!
         }
     }
 }
@@ -326,7 +327,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         Collider::capsule(1.0, 1.5),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
-            health: 100,
+            health: 25,
             player_name: "Admin".into(),
             player_id: 1,
             jumps: 2,
@@ -378,8 +379,14 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
 
 fn bot_handling(
     time: Res<Time>,
+    mut commands: Commands,
+    mut materials: ResMut<Assets<MuzzleFlash>>,
+    mut ray_cast: MeshRayCast,
+    mut gizmos: Gizmos,
     mut q: Query<(Entity, &mut Transform, &mut CharacterController, &BotData, &mut LinearVelocity), (With<Bots>, Without<Player>)>,
     mut p: Query<(&Transform, &mut PlayerData), With<Player>>,
+    p_entity: Query<Entity, With<Player>>,
+    parents: Query<&ChildOf>,
 ) {
     let Ok((pt, mut pd)) = p.single_mut() else { return; };
     let pos: Vec<_> = q.iter().map(|(e, t, _, _, _)| (e, t.translation)).collect();
@@ -398,7 +405,44 @@ fn bot_handling(
             let rand_number = rand::rng().random_range(1..500);            
             lv.x = c.move_direction.x + rand::rng().random_range(-5.0..5.0);
             lv.z = c.move_direction.z + rand::rng().random_range(-5.0..5.0);
-            if rand_number == b.hit_number { pd.health -= 1; }
+            if rand_number == b.hit_number {
+                let Ok(player_entity) = p_entity.single() else { continue; };
+                let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
+                let ray_origin = t.translation + *ray_dir * 2.0; // Start outside the bot so it doesn't shoot itself
+                let ray = Ray3d::new(ray_origin, ray_dir);
+                if let Some((hit_entity, hit_data)) = ray_cast.cast_ray(ray, &MeshRayCastSettings::default()).first() {
+                    gizmos.line(ray_origin, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
+                    let mut current_entity = *hit_entity;
+                    loop {
+                        if current_entity == player_entity {
+                            pd.health -= 1;
+                            println!("Player hit! Health: {}", pd.health);
+                            break;
+                        }
+                        if let Ok(parent) = parents.get(current_entity) {
+                            current_entity = parent.0; // Walk up the hierarchy to find the root player entity
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let flash = materials.add(MuzzleFlash {
+                    power: 1.0,
+                    color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
+                });
+                commands.spawn((
+                    MaterialNode(flash),
+                    Node {
+                        width: Val::Px(200.0),
+                        height: Val::Px(200.0),
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(50.0),
+                        left: Val::Percent(45.0),
+                        ..default()
+                    },
+                ));
+                println!("Hit")
+            }
         } else {
             println!("Dead")
         }
@@ -742,26 +786,24 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
     ray_handling(ray_pos, dir, time, ray_cast, &mut gizmos, query, parent);
 }
 
-fn muzzle_flash(mouse_button: Res<ButtonInput<MouseButton>>, mut commands: Commands, mut materials: ResMut<Assets<MuzzleFlash>>, player_query: Query<Entity, With<Player>>) {
+fn muzzle_flash(mouse_button: Res<ButtonInput<MouseButton>>, mut commands: Commands, mut materials: ResMut<Assets<MuzzleFlash>>, player_query: Query<Entity, With<Player>>, mut health_query: Query<&mut PlayerData, With<Player>>) {
     if mouse_button.just_pressed(MouseButton::Left) {
         if let Ok(player_entity) = player_query.single() {
             let flash = materials.add(MuzzleFlash {
                 power: 1.0,
                 color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
             });
-            commands.entity(player_entity).with_children(|parent| {
-                parent.spawn((
-                    MaterialNode(flash),
-                    Node {
-                        width: Val::Px(200.0),
-                        height: Val::Px(200.0),
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(-100.0),
-                        top: Val::Px(-100.0),
-                        ..default()
-                    },
-                ));
-            });
+            commands.spawn((
+                MaterialNode(flash),
+                Node {
+                    width: Val::Px(300.0),
+                    height: Val::Px(300.0),
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(150.0),
+                    right: Val::Px(250.0),
+                    ..default()
+                },
+            ));
         }
     }
 }
@@ -782,6 +824,7 @@ fn main() {
         }))
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
+        .add_plugins(UiMaterialPlugin::<MuzzleFlash>::default())
         .add_plugins(HanabiPlugin)
         .init_asset::<WeaponData>()
         .init_resource::<TerrainGen>()
