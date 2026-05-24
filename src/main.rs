@@ -37,6 +37,14 @@ pub struct MuzzleFlash {
     pub color: LinearRgba,
 }
 
+#[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
+pub struct ShotIndicator {
+    #[uniform(0)]
+    pub health_or: u32,
+    #[uniform(0)]
+    pub color: LinearRgba,
+}
+
 #[derive(Component)]
 struct Crosshair;
 
@@ -224,6 +232,10 @@ fn health_bar(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>
     ));
 }
 
+fn shot_indicator(mut commands: Commands, mut materials: ResMut<Assets<ShotIndicator>>) {
+
+}
+
 fn health_bar_handling(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>, query: Query<&PlayerData, With<Player>>) {
     if let Ok(player) = query.single() {
         for (_, material) in materials.iter_mut() {
@@ -330,7 +342,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         Player,
         RigidBody::Dynamic,
         SceneRoot(player_model),
-        Collider::capsule(1.0, 1.5),
+        Collider::capsule(1.0, 0.5),
         Transform::from_xyz(0.0, 10.0, 0.0),
         PlayerData {
             health: 100,
@@ -418,7 +430,7 @@ fn bot_handling(
                 let ray = Ray3d::new(t.translation, ray_dir);
                 let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
                 let hit_number = 69;
-                let hit_chance = rand::rng().random_range(1..250);
+                let hit_chance = rand::rng().random_range(1..50);
                 if hit_number == hit_chance {
                     for (hit_entity, hit_data) in hits {
                         let mut current_entity = *hit_entity;
@@ -535,8 +547,17 @@ fn movement_animations(
     }
 }
 
-fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>) {
+fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<&mut EffectSpawner, Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
     for (transform, mut linear_velocity, mut player, mut controller) in query.iter_mut() {
+        if player.jumps < 2 {
+            player.jump_timer.tick(time.delta());
+            if player.jump_timer.just_finished() {
+                player.jumps += 1;
+                player.jump_timer.reset();
+            }
+        } else {
+            player.jump_timer.reset();
+        }
         let mut move_direction = Vec3::ZERO;
         if keyboard_input.pressed(KeyCode::KeyW) && player.health > 0 {
             move_direction.z += 1.0;
@@ -551,16 +572,12 @@ fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, m
             move_direction.x -= 1.0;
         }
         if keyboard_input.just_pressed(KeyCode::Space) && player.health > 0 {
-            if player.jumps == 0 {
-                player.jump_timer.tick(time.delta());
-                if player.jump_timer.just_finished() {
-                    player.jumps = 2;
-                    player.jump_timer.reset();
-                }
-            }
             if player.jumps > 0 {
                 linear_velocity.y = 10.0;
                 player.jumps -= 1;
+                for mut spawner in spawners.iter_mut() {
+                    spawner.reset();
+                }
             }
         }
         
@@ -700,7 +717,7 @@ fn setup(
     });
 }
 
-fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>) {
+fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>) {
     let Ok(player) = player_query.single() else {
         return;
     };
@@ -711,25 +728,27 @@ fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<Eff
     gradient.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
 
     let mut size_tapering = bevy_hanabi::Gradient::new();
-    size_tapering.add_key(0.0, Vec3::splat(0.2));
-    size_tapering.add_key(0.5, Vec3::splat(0.075));
+    size_tapering.add_key(0.0, Vec3::splat(0.5));
+    size_tapering.add_key(0.15, Vec3::splat(0.8));
+    size_tapering.add_key(0.7, Vec3::splat(0.3));
     size_tapering.add_key(1.0, Vec3::splat(0.0));
     let mut module = Module::default();
-    let accel = module.lit(Vec3::new(0., -3., 0.));
+    let accel = module.lit(Vec3::new(0., -10., 0.));
     let update_accel = AccelModifier::new(accel);
-    let init_vel = SetVelocitySphereModifier {
-        center: module.lit(Vec3::ZERO),
-        speed: module.lit(1.5),
-    };
     let init_pos = SetPositionSphereModifier {
         center: module.lit(Vec3::ZERO),
-        radius: module.lit(0.15),
-        dimension: ShapeDimension::Surface,
+        radius: module.lit(0.03), 
+        dimension: ShapeDimension::Surface, 
     };
-    let lifetime = module.lit(0.1);
+    let init_vel = SetVelocitySphereModifier {
+        center: module.lit(Vec3::new(0.0, 1.0, 0.0)),
+        speed: module.lit(15.0),
+    };
+    let lifetime = module.lit(0.8);
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let bottom_thruster = effects.add(
-        EffectAsset::new(63000, SpawnerSettings::rate(1000.0.into()), module)
+        EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
@@ -769,15 +788,6 @@ fn particle_effects_setup(mut commands: Commands, mut effects: ResMut<Assets<Eff
         .add_children(&[thruster_left, thruster_right]);
 }
 
-fn particle_effects(keycode: Res<ButtonInput<KeyCode>>, mut spawners: Query<&mut EffectSpawner, Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
-    let jumping = keycode.just_pressed(KeyCode::Space);
-    for spawner in &mut spawners {
-        spawner.with_active(jumping);
-        sleep(Duration::from_millis(100));
-        spawner.with_active(!jumping);
-    }
-}
-
 pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode: Res<ButtonInput<KeyCode>>) {
     if keycode.just_pressed(KeyCode::KeyQ) {
         for mut visibility in &mut query {
@@ -804,7 +814,7 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
 }
 
 fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
-    if !mouse_button.pressed(MouseButton::Left) { return; }
+    if !mouse_button.just_pressed(MouseButton::Left) { return; }
     let Ok(mut player_transform) = player_query.single_mut() else {
         return;
     };
@@ -886,13 +896,13 @@ fn main() {
                 mesh_load_check,
                 shooting,
                 botdead,
-                particle_effects_setup,
                 particle_effects,
                 jump_indicator_handling,
                 health_bar_handling,
                 gun_select_handling,
                 muzzle_flash,
                 despawn_ray,
+                targeting_disruptor
             ),
         )
         .run();
