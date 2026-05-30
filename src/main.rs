@@ -1,11 +1,9 @@
-use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, render::{settings::{WgpuSettings, PowerPreference}, RenderPlugin, render_resource::WgpuFeatures, settings::{RenderCreation}}};
+use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
-use std::{collections::HashMap, ops::{Deref, DerefMut}, time::Duration};
+use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 use bevy_hanabi::*;
-use std::thread::sleep;
-use std::io;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -126,6 +124,11 @@ struct BulletMagazine;
 
 #[derive(Component)]
 struct MuzzleFlashEffect;
+
+#[derive(Event)]
+pub struct BotFireEvent {
+    pub bot_entity: Entity,
+}
 
 impl UiMaterial for JumpIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
@@ -364,7 +367,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
     ));
 }
 
-fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut effects: ResMut<Assets<EffectAsset>>) {
     let bot_number = 10;
     let mut rng = rand::rng();
     let hits = rng.random_range(1..20);
@@ -379,7 +382,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
     };
     for i in 0..bots.bot_quantity {
         bots.bot_offset = i as f32 * bots.bot_quantity as f32 - 10.0;
-        commands.spawn((
+        let bot = commands.spawn((
             GlobalTransform::default(),
             Bots,
             RigidBody::Dynamic,
@@ -399,7 +402,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
                 move_direction: Vec3::ZERO,
             },
             LockedAxes::ROTATION_LOCKED,
-        ));
+        )).id();
     }
 }
 
@@ -413,6 +416,8 @@ fn bot_handling(
     mut p: Query<(&Transform, &mut PlayerData), With<Player>>,
     p_entity: Query<Entity, With<Player>>,
     parents: Query<&ChildOf>,
+    mut effects: ResMut<Assets<EffectAsset>>,
+    mut bot_fire_events: EventWriter<BotFireEvent>,
 ) {
     let Ok((pt, mut pd)) = p.single_mut() else { return; };
     let pos: Vec<_> = q.iter().map(|(e, t, _, _, _)| (e, t.translation)).collect();
@@ -436,8 +441,9 @@ fn bot_handling(
                 let ray = Ray3d::new(t.translation, ray_dir);
                 let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
                 let hit_number = 1;
-                let hit_chance = rand::rng().random_range(1..50);
+                let hit_chance = rand::rng().random_range(1..25);
                 if hit_number == hit_chance {
+                    bot_fire_events.send(BotFireEvent { bot_entity: e });
                     for (hit_entity, hit_data) in hits {
                         let mut current_entity = *hit_entity;
                         let mut hit_self = false;
@@ -570,6 +576,7 @@ fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, m
                 linear_velocity.y = 10.0;
                 player.jumps -= 1;
                 for mut spawner in spawners.iter_mut() {
+                    spawner.active = true;
                     spawner.reset();
                 }
             }
@@ -711,10 +718,11 @@ fn setup(
     });
 }
 
-fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>) {
+fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>, bot_query: Query<(Entity, &BotData), Added<IsBot>>) {
     let Ok(player) = player_query.single() else {
         return;
     };
+    println!("Sucessfully spawned player, setting up particle effects...");
     let mut gradient_thruster = bevy_hanabi::Gradient::new();
     gradient_thruster.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
     gradient_thruster.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
@@ -740,6 +748,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     };
     let lifetime = module.lit(0.1);
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
+    let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
+    let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     let bottom_thruster = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
@@ -747,6 +757,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
+            .init(init_size)
+            .init(init_color)
             .render(ColorOverLifetimeModifier {
                 gradient: gradient_thruster,
                 ..Default::default()
@@ -802,11 +814,13 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         dimension: ShapeDimension::Surface, 
     };
     let init_vel = SetVelocitySphereModifier {
-        center: module.lit(Vec3::new(0.0, 1.0, 0.0)),
+        center: module.lit(Vec3::new(0.0, 0.0, -1.0)),
         speed: module.lit(15.0),
     };
-    let lifetime = module.lit(0.1);
+    let lifetime = module.lit(0.5);
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
+    let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
+    let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     let muzzle_effect = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
@@ -814,6 +828,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
+            .init(init_size)
+            .init(init_color)
             .render(ColorOverLifetimeModifier {
                 gradient: gradient_muzzle,
                 ..Default::default()
@@ -833,12 +849,25 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        DespawnTimer(Timer::from_seconds(0.2, TimerMode::Once)), // Clean up entity
+        MuzzleFlashEffect,
     )).id();
     commands
         .entity(player)
         .add_children(&[muzzle_flash]);
 }
+
+fn particle_effects_handling(mut bot_fire_events: EventReader<BotFireEvent>, keycode: Res<ButtonInput<KeyCode>>, mut mouse_button: Res<ButtonInput<MouseButton>>, mut thruster_spawners: Query<&mut EffectSpawner, (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<MuzzleFlashEffect>)>, mut muzzle_spawner: Query<&mut EffectSpawner, With<MuzzleFlashEffect>>) {
+    if mouse_button.just_pressed(MouseButton::Left) {    
+        for mut spawner in muzzle_spawner.iter_mut() {
+            spawner.active = true;
+            spawner.reset();
+        }
+    }
+    for event in bot_fire_events.read() {
+        println!("Bot fired! Triggering particle effect for bot entity: {:?}", event.bot_entity);
+    }
+}
+
 
 pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode: Res<ButtonInput<KeyCode>>) {
     if keycode.just_pressed(KeyCode::KeyQ) {
@@ -870,7 +899,7 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
     let Ok(mut player_transform) = player_query.single_mut() else {
         return;
     };
-    let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0,);
+    let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
     let (inner_camera, camera_transform) = *camera;
     let Ok(camera_ray) = inner_camera.viewport_to_world(camera_transform, in_screen_pos) else { return; };
     let target = if let Some((_, hit)) = ray_cast.cast_ray(camera_ray, &MeshRayCastSettings::default()).first() {
@@ -884,19 +913,6 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
     let ray_pos = player_transform.translation + *forward * 2.25;
     let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
     ray_handling(ray_pos, dir, time, ray_cast, &mut gizmos, query, parent);
-}
-
-fn particle_effects_handling(keycode: Res<ButtonInput<KeyCode>>, mut mouse_button: Res<ButtonInput<MouseButton>>, mut thruster_spawners: Query<&mut EffectSpawner, (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<MuzzleFlash>)>, mut muzzle_spawner: Query<&mut EffectSpawner, With<MuzzleFlash>>) {
-    if mouse_button.just_pressed(MouseButton::Left) {    
-        for mut spawner in thruster_spawners.iter_mut() {
-            spawner.reset();
-        }
-    }
-    if keycode.just_pressed(KeyCode::Space) {
-        for mut spawner in muzzle_spawner.iter_mut() {
-            spawner.reset();
-        }
-    }
 }
 
 fn main() {
@@ -917,6 +933,7 @@ fn main() {
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
         .add_plugins(UiMaterialPlugin::<ShotIndicator>::default())
         .add_plugins(HanabiPlugin)
+        .add_event::<BotFireEvent>()
         .init_asset::<WeaponData>()
         .init_asset::<MuzzleFlash>()
         .init_resource::<TerrainGen>()
@@ -925,7 +942,7 @@ fn main() {
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup, gun_select_setup))
-        .add_systems(Startup, (bot_spawn, jump_indicator, health_bar, particle_effects))
+        .add_systems(Startup, (bot_spawn, jump_indicator, health_bar))
         .add_systems(
             Update,
             (
@@ -944,6 +961,7 @@ fn main() {
                 gun_select_handling,
                 despawn_ray,
                 targeting_disruptor,
+                particle_effects,
                 particle_effects_handling,
             ),
         )
