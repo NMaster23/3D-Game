@@ -1,4 +1,4 @@
-use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}, render::{settings::{WgpuSettings, PowerPreference}, RenderPlugin, render_resource::WgpuFeatures, settings::{RenderCreation}}};
 use avian3d::prelude::*;
 use std::{collections::HashMap, ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -43,6 +43,10 @@ pub struct ShotIndicator {
     pub health_or: u32,
     #[uniform(0)]
     pub color: LinearRgba,
+    #[uniform(0)]
+    pub shot: f32,
+    #[uniform(0)]
+    pub magazine: f32,
 }
 
 #[derive(Component)]
@@ -117,6 +121,12 @@ struct Animations {
     graph_handle: Handle<AnimationGraph>,
 }
 
+#[derive(Component)]
+struct BulletMagazine;
+
+#[derive(Component)]
+struct MuzzleFlashEffect;
+
 impl UiMaterial for JumpIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/jump_indicator.wgsl".into()
@@ -129,9 +139,9 @@ impl UiMaterial for HealthBarUI {
     }
 }
 
-impl UiMaterial for MuzzleFlash {
+impl UiMaterial for ShotIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
-        "shaders/muzzle_flash.wgsl".into()
+        "shaders/shot_indicator.wgsl".into()
     }
 }
 
@@ -230,10 +240,6 @@ fn health_bar(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>
             color: LinearRgba::new(0.2, 0.8, 0.2, 1.0),
         },
     ));
-}
-
-fn shot_indicator(mut commands: Commands, mut materials: ResMut<Assets<ShotIndicator>>) {
-
 }
 
 fn health_bar_handling(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>, query: Query<&PlayerData, With<Player>>) {
@@ -429,7 +435,7 @@ fn bot_handling(
                 let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
                 let ray = Ray3d::new(t.translation, ray_dir);
                 let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
-                let hit_number = 69;
+                let hit_number = 1;
                 let hit_chance = rand::rng().random_range(1..50);
                 if hit_number == hit_chance {
                     for (hit_entity, hit_data) in hits {
@@ -464,18 +470,6 @@ fn bot_handling(
                                 power: 1.0,
                                 color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
                             });
-                            commands.spawn((
-                                MaterialNode(flash),
-                                Node {
-                                    width: Val::Px(200.0),
-                                    height: Val::Px(200.0),
-                                    position_type: PositionType::Absolute,
-                                    top: Val::Px(50.0),
-                                    left: Val::Percent(45.0),
-                                    ..default()
-                                },
-                                DespawnTimer(Timer::from_seconds(0.1, TimerMode::Once)),
-                            ));
                         }
                         break;
                     }
@@ -721,17 +715,17 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let Ok(player) = player_query.single() else {
         return;
     };
-    let mut gradient = bevy_hanabi::Gradient::new();
-    gradient.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
-    gradient.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
-    gradient.add_key(0.6, Vec4::new(0.0, 0.2, 0.7, 0.5));
-    gradient.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
+    let mut gradient_thruster = bevy_hanabi::Gradient::new();
+    gradient_thruster.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
+    gradient_thruster.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
+    gradient_thruster.add_key(0.6, Vec4::new(0.0, 0.2, 0.7, 0.5));
+    gradient_thruster.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
 
-    let mut size_tapering = bevy_hanabi::Gradient::new();
-    size_tapering.add_key(0.0, Vec3::splat(0.5));
-    size_tapering.add_key(0.15, Vec3::splat(0.8));
-    size_tapering.add_key(0.7, Vec3::splat(0.3));
-    size_tapering.add_key(1.0, Vec3::splat(0.0));
+    let mut size_thruster = bevy_hanabi::Gradient::new();
+    size_thruster.add_key(0.0, Vec3::splat(0.5));
+    size_thruster.add_key(0.15, Vec3::splat(0.8));
+    size_thruster.add_key(0.7, Vec3::splat(0.3));
+    size_thruster.add_key(1.0, Vec3::splat(0.0));
     let mut module = Module::default();
     let accel = module.lit(Vec3::new(0., -10., 0.));
     let update_accel = AccelModifier::new(accel);
@@ -744,20 +738,21 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         center: module.lit(Vec3::new(0.0, 1.0, 0.0)),
         speed: module.lit(15.0),
     };
-    let lifetime = module.lit(0.8);
+    let lifetime = module.lit(0.1);
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let bottom_thruster = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
+            .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
             .render(ColorOverLifetimeModifier {
-                gradient: gradient,
+                gradient: gradient_thruster,
                 ..Default::default()
             })
             .render(SizeOverLifetimeModifier {
-                gradient: size_tapering,
+                gradient: size_thruster,
                 screen_space_size: false,
                 ..Default::default()
             })
@@ -766,7 +761,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let thruster_left = commands.spawn((
         Name::new("Thruster Left"),
         ParticleEffect::new(bottom_thruster.clone()),
-        Transform::from_xyz(-0.3, -1.5, 0.0),
+        Transform::from_xyz(-0.3, 0.0, 0.0),
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
@@ -776,7 +771,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let thruster_right = commands.spawn((
         Name::new("Thruster Right"),
         ParticleEffect::new(bottom_thruster),
-        Transform::from_xyz(0.3, -1.5, 0.0),
+        Transform::from_xyz(0.3, 0.0, 0.0),
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
@@ -786,6 +781,63 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     commands
         .entity(player)
         .add_children(&[thruster_left, thruster_right]);
+    
+    let mut gradient_muzzle = bevy_hanabi::Gradient::new();
+    gradient_muzzle.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
+    gradient_muzzle.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
+    gradient_muzzle.add_key(0.6, Vec4::new(0.0, 0.2, 0.7, 0.5));
+    gradient_muzzle.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
+
+    let mut size_muzzle = bevy_hanabi::Gradient::new();
+    size_muzzle.add_key(0.0, Vec3::splat(0.2));
+    size_muzzle.add_key(0.05, Vec3::splat(1.5));
+    size_muzzle.add_key(0.2, Vec3::splat(0.8));
+    size_muzzle.add_key(1.0, Vec3::splat(0.0));
+    let mut module = Module::default();
+    let accel = module.lit(Vec3::new(0., -10., 0.));
+    let update_accel = AccelModifier::new(accel);
+    let init_pos = SetPositionSphereModifier {
+        center: module.lit(Vec3::ZERO),
+        radius: module.lit(0.03), 
+        dimension: ShapeDimension::Surface, 
+    };
+    let init_vel = SetVelocitySphereModifier {
+        center: module.lit(Vec3::new(0.0, 1.0, 0.0)),
+        speed: module.lit(15.0),
+    };
+    let lifetime = module.lit(0.1);
+    let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
+    let muzzle_effect = effects.add(
+        EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
+            .with_simulation_space(SimulationSpace::Local)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
+            .init(init_pos)
+            .init(init_vel)
+            .init(init_lifetime)
+            .render(ColorOverLifetimeModifier {
+                gradient: gradient_muzzle,
+                ..Default::default()
+            })
+            .render(SizeOverLifetimeModifier {
+                gradient: size_muzzle,
+                screen_space_size: false,
+                ..Default::default()
+            })
+            .update(update_accel)
+    );
+    let muzzle_flash = commands.spawn((
+        Name::new("Muzzle Flash"),
+        ParticleEffect::new(muzzle_effect),
+        Transform::from_xyz(0.3, 1.0, 1.5), 
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+        DespawnTimer(Timer::from_seconds(0.2, TimerMode::Once)), // Clean up entity
+    )).id();
+    commands
+        .entity(player)
+        .add_children(&[muzzle_flash]);
 }
 
 pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode: Res<ButtonInput<KeyCode>>) {
@@ -834,31 +886,21 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
     ray_handling(ray_pos, dir, time, ray_cast, &mut gizmos, query, parent);
 }
 
-fn muzzle_flash(mouse_button: Res<ButtonInput<MouseButton>>, mut commands: Commands, mut materials: ResMut<Assets<MuzzleFlash>>, player_query: Query<Entity, With<Player>>, mut health_query: Query<&mut PlayerData, With<Player>>) {
-    if mouse_button.just_pressed(MouseButton::Left) {
-        if let Ok(player_entity) = player_query.single() {
-            let flash = materials.add(MuzzleFlash {
-                power: 1.0,
-                color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
-            });
-            commands.spawn((
-                MaterialNode(flash),
-                Node {
-                    width: Val::Px(300.0),
-                    height: Val::Px(300.0),
-                    position_type: PositionType::Absolute,
-                    bottom: Val::Px(150.0),
-                    right: Val::Px(250.0),
-                    ..default()
-                },
-                DespawnTimer(Timer::from_seconds(0.1, TimerMode::Once)),
-            ));
+fn particle_effects_handling(keycode: Res<ButtonInput<KeyCode>>, mut mouse_button: Res<ButtonInput<MouseButton>>, mut thruster_spawners: Query<&mut EffectSpawner, (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<MuzzleFlash>)>, mut muzzle_spawner: Query<&mut EffectSpawner, With<MuzzleFlash>>) {
+    if mouse_button.just_pressed(MouseButton::Left) {    
+        for mut spawner in thruster_spawners.iter_mut() {
+            spawner.reset();
+        }
+    }
+    if keycode.just_pressed(KeyCode::Space) {
+        for mut spawner in muzzle_spawner.iter_mut() {
+            spawner.reset();
         }
     }
 }
 
 fn main() {
-    App::new() 
+    App::new()
         .add_plugins(EmbeddedAssetPlugin {
             mode: bevy_embedded_assets::PluginMode::ReplaceDefault,
         })
@@ -873,16 +915,17 @@ fn main() {
         }))
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
-        .add_plugins(UiMaterialPlugin::<MuzzleFlash>::default())
+        .add_plugins(UiMaterialPlugin::<ShotIndicator>::default())
         .add_plugins(HanabiPlugin)
         .init_asset::<WeaponData>()
+        .init_asset::<MuzzleFlash>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .init_resource::<SelectedWeapon>()
         .add_plugins(PhysicsPlugins::default())
-        .insert_resource(Gravity(Vec3::new(0.0, -15.0, 0.0))) 
+        .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup, gun_select_setup))
-        .add_systems(Startup, (bot_spawn, jump_indicator, health_bar))
+        .add_systems(Startup, (bot_spawn, jump_indicator, health_bar, particle_effects))
         .add_systems(
             Update,
             (
@@ -896,13 +939,12 @@ fn main() {
                 mesh_load_check,
                 shooting,
                 botdead,
-                particle_effects,
                 jump_indicator_handling,
                 health_bar_handling,
                 gun_select_handling,
-                muzzle_flash,
                 despawn_ray,
-                targeting_disruptor
+                targeting_disruptor,
+                particle_effects_handling,
             ),
         )
         .run();
