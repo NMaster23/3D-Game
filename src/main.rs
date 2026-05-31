@@ -789,7 +789,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     size_muzzle.add_key(0.2, Vec3::splat(0.8));
     size_muzzle.add_key(1.0, Vec3::splat(0.0));
     let mut module = Module::default();
-    let accel = module.lit(Vec3::new(0., -10., 0.));
+    let accel = module.lit(Vec3::new(0., 0., 0.));
     let update_accel = AccelModifier::new(accel);
     let init_pos = SetPositionSphereModifier {
         center: module.lit(Vec3::ZERO),
@@ -804,7 +804,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
-    let muzzle_effect = effects.add(
+    let muzzle_effect_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
@@ -826,7 +826,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     );
     let muzzle_flash = commands.spawn((
         Name::new("Muzzle Flash"),
-        ParticleEffect::new(muzzle_effect),
+        ParticleEffect::new(muzzle_effect_base),
         Transform::from_xyz(0.0, 2.0, -0.5), 
         GlobalTransform::default(),
         Visibility::default(),
@@ -834,6 +834,53 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         ViewVisibility::default(),
         MuzzleFlashEffect,
     )).id();
+    let mut gradient_muzzle_2 = bevy_hanabi::Gradient::new();
+    gradient_muzzle_2.add_key(0.0, Vec4::new(0.8, 1.0, 1.0, 1.0));
+    gradient_muzzle_2.add_key(0.1, Vec4::new(0.0, 1.0, 0.8, 1.0));
+    gradient_muzzle_2.add_key(0.5, Vec4::new(0.0, 0.5, 0.2, 0.8));
+    gradient_muzzle_2.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
+
+    let mut size_muzzle_2 = bevy_hanabi::Gradient::new();
+    size_muzzle_2.add_key(0.0, Vec3::splat(0.1));
+    size_muzzle_2.add_key(0.05, Vec3::splat(0.6));
+    size_muzzle_2.add_key(0.2, Vec3::splat(0.1));
+    size_muzzle_2.add_key(1.0, Vec3::splat(0.0));
+    let mut module = Module::default();
+    let accel = module.lit(Vec3::new(0., 0., 0.));
+    let update_accel = AccelModifier::new(accel);
+    let init_pos = SetPositionSphereModifier {
+        center: module.lit(Vec3::ZERO),
+        radius: module.lit(0.03), 
+        dimension: ShapeDimension::Surface, 
+    };
+    let init_vel = SetVelocitySphereModifier {
+        center: module.lit(Vec3::new(0.0, 0.0, -1.0)),
+        speed: module.lit(80.0), // Extremely fast laser pulse
+    };
+    let lifetime = module.lit(1.5);
+    let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
+    let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
+    let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
+    let muzzle_effect_2 = effects.add(
+        EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
+            .with_simulation_space(SimulationSpace::Local)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
+            .init(init_pos)
+            .init(init_vel)
+            .init(init_lifetime)
+            .init(init_size)
+            .init(init_color)
+            .render(ColorOverLifetimeModifier {
+                gradient: gradient_muzzle_2,
+                ..Default::default()
+            })
+            .render(SizeOverLifetimeModifier {
+                gradient: size_muzzle_2,
+                screen_space_size: false,
+                ..Default::default()
+            })
+            .update(update_accel)
+    );
     commands
         .entity(player)
         .add_children(&[muzzle_flash]);
@@ -888,12 +935,25 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn shooting(selected_weapon: Res<SelectedWeapon>, window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
-    if !mouse_button.just_pressed(MouseButton::Left) { return; }
-    let Ok(mut player_transform) = player_query.single_mut() else {
+fn shooting(mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform), (With<MuzzleFlashEffect>, Without<Player>)>, mut fire_cooldown: Local<f32>, selected_weapon: Res<SelectedWeapon>, window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
+    if *fire_cooldown > 0.0 {
+        *fire_cooldown -= time.delta_secs();
+    }
+    if !mouse_button.pressed(MouseButton::Left) { return; }
+    if *fire_cooldown > 0.0 {
+        return;
+    }
+    let Ok(player_transform) = player_query.single_mut() else {
         return;
     };
     let current_weapon = selected_weapon.id;
+    let fire_rate = match current_weapon {
+        1 => 0.5,
+        2 => 1.0,
+        3 => 5.0,
+        _ => 0.5,
+    };
+    *fire_cooldown = fire_rate;
     let max_range = match current_weapon {
         1 => 50.0,
         2 => 100.0,
@@ -905,6 +965,12 @@ fn shooting(selected_weapon: Res<SelectedWeapon>, window: Single<&Window>, camer
         2 => 10,
         3 => 50,
         _ => 1,
+    };
+    let flash_scale = match current_weapon {
+        1 => 1.0,
+        2 => 1.5,
+        3 => 2.0,
+        _ => 1.0,
     };
     let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
     let (inner_camera, camera_transform) = *camera;
@@ -920,6 +986,11 @@ fn shooting(selected_weapon: Res<SelectedWeapon>, window: Single<&Window>, camer
     let ray_pos = player_transform.translation + Vec3::new(0.0, 0.75, 0.0) + *forward * 2.25;
     let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
     ray_handling(ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
+    for (mut spawner, mut transform) in shooting_effects.iter_mut() {
+        transform.scale = Vec3::splat(flash_scale);
+        spawner.active = true;
+        spawner.reset();
+    }
 }
 
 fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With<Player>>) {
