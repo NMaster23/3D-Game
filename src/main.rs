@@ -855,13 +855,13 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     };
     let init_vel = SetVelocitySphereModifier {
         center: module.lit(Vec3::new(0.0, 0.0, -1.0)),
-        speed: module.lit(80.0), // Extremely fast laser pulse
+        speed: module.lit(80.0),
     };
     let lifetime = module.lit(1.5);
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
-    let muzzle_effect_2 = effects.add(
+    let muzzle_effect_2_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
@@ -881,9 +881,82 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             })
             .update(update_accel)
     );
+    let muzzle_effect_2 = commands.spawn((
+        Name::new("Muzzle Effect 2"),
+        ParticleEffect::new(muzzle_effect_2_base),
+        Transform::from_xyz(0.0, 2.0, -0.5), 
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+        MuzzleFlashEffect,
+    )).id();
+
+    // --- Muzzle Effect 3: Heavy Weapon (Explosive burst & thick smoke) ---
+    let mut gradient_muzzle_3 = bevy_hanabi::Gradient::new();
+    gradient_muzzle_3.add_key(0.0, Vec4::new(1.0, 0.9, 0.5, 1.0));
+    gradient_muzzle_3.add_key(0.1, Vec4::new(1.0, 0.4, 0.0, 1.0));
+    gradient_muzzle_3.add_key(0.3, Vec4::new(0.2, 0.2, 0.2, 0.8));
+    gradient_muzzle_3.add_key(1.0, Vec4::new(0.1, 0.1, 0.1, 0.0));
+
+    let mut size_muzzle_3 = bevy_hanabi::Gradient::new();
+    size_muzzle_3.add_key(0.0, Vec3::splat(0.5));
+    size_muzzle_3.add_key(0.1, Vec3::splat(2.5));
+    size_muzzle_3.add_key(0.4, Vec3::splat(1.5));
+    size_muzzle_3.add_key(1.0, Vec3::splat(0.0));
+    
+    let mut module = Module::default();
+    let accel = module.lit(Vec3::new(0., 1.5, 0.));
+    let update_accel = AccelModifier::new(accel);
+    
+    let init_pos = SetPositionSphereModifier {
+        center: module.lit(Vec3::ZERO),
+        radius: module.lit(0.08), 
+        dimension: ShapeDimension::Volume,
+    };
+    let init_vel = SetVelocitySphereModifier {
+        center: module.lit(Vec3::new(0.0, 0.0, -1.0)),
+        speed: module.lit(20.0),
+    };
+    let lifetime = module.lit(2.5);
+    let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
+    let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
+    let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
+    
+    let muzzle_effect_3_base = effects.add(
+        EffectAsset::new(63000, SpawnerSettings::once(800.0.into()), module) // Extremely high particle count
+            .with_simulation_space(SimulationSpace::Local)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Blend) 
+            .init(init_pos)
+            .init(init_vel)
+            .init(init_lifetime)
+            .init(init_size)
+            .init(init_color)
+            .render(ColorOverLifetimeModifier {
+                gradient: gradient_muzzle_3,
+                ..Default::default()
+            })
+            .render(SizeOverLifetimeModifier {
+                gradient: size_muzzle_3,
+                screen_space_size: false,
+                ..Default::default()
+            })
+            .update(update_accel)
+    );
+    let muzzle_effect_3 = commands.spawn((
+        Name::new("Muzzle Effect 3"),
+        ParticleEffect::new(muzzle_effect_3_base),
+        Transform::from_xyz(0.0, 2.0, -0.5), 
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+        MuzzleFlashEffect,
+    )).id();
+
     commands
         .entity(player)
-        .add_children(&[muzzle_flash]);
+        .add_children(&[muzzle_flash, muzzle_effect_2, muzzle_effect_3]);
 }
 
 fn particle_effects_handling(keycode: Res<ButtonInput<KeyCode>>, selected_weapon: Res<SelectedWeapon>, mouse_button: Res<ButtonInput<MouseButton>>, mut thruster_spawners: Query<&mut EffectSpawner, (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<MuzzleFlashEffect>)>, mut muzzle_spawner: Query<(&mut EffectSpawner, &mut Transform), With<MuzzleFlashEffect>>) {
