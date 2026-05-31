@@ -107,7 +107,7 @@ struct WeaponData {
     power: f32,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct SelectedWeapon {
     pub id: u32,
 }
@@ -132,13 +132,18 @@ struct Animations {
 struct BulletMagazine;
 
 #[derive(Component)]
-struct MuzzleFlashEffect;
+struct MuzzleFlashEffect(pub u32);
 
 #[derive(Resource, Default)]
 struct PlayerWeapon {
     pub weapons: HashMap<u32, Handle<WeaponData>>,
 }
 
+#[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
+pub struct WeaponSelectorUI {
+    #[uniform(0)]
+    pub selected_weapon: u32,
+}
 
 impl UiMaterial for JumpIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
@@ -152,6 +157,12 @@ impl UiMaterial for HealthBarUI {
     }
 }
 
+impl UiMaterial for WeaponSelectorUI {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/weapon_selector.wgsl".into()
+    }
+}
+
 impl Default for BotConfig {
     fn default() -> Self {
         Self {
@@ -159,6 +170,12 @@ impl Default for BotConfig {
             disruptor_timer: Timer::from_seconds(5.0, TimerMode::Once),
             is_disrupted: false,
         }
+    }
+}
+
+impl Default for SelectedWeapon {
+    fn default() -> Self {
+        Self { id: 1 }
     }
 }
 
@@ -284,16 +301,42 @@ fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpInd
     }
 }
 
+fn weapon_selector_setup(mut commands: Commands, mut materials: ResMut<Assets<WeaponSelectorUI>>) {
+    commands.spawn((
+        MaterialNode(materials.add(WeaponSelectorUI { selected_weapon: 1 })),
+        Node {
+            width: Val::Px(1000.0),
+            height: Val::Px(1000.0),
+            position_type: PositionType::Absolute,
+            top: Val::Px(30.0),
+            left: Val::Px(30.0),
+            ..Default::default()
+        },
+        WeaponSelectorUI { selected_weapon: 1 },
+    ));
+}
+
+fn weapon_selector_handling(selected_weapon: Res<SelectedWeapon>, mut materials: ResMut<Assets<WeaponSelectorUI>>) {
+    if selected_weapon.is_changed() {
+        for (_, material) in materials.iter_mut() {
+            material.selected_weapon = selected_weapon.id;
+        }
+    }
+}
+
 fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResMut<SelectedWeapon>) {
     let mut selection = None;
-    if keycode.just_pressed(KeyCode::Numpad1) {
+    if keycode.just_pressed(KeyCode::Digit1) {
         selection = Some(1);
+        println!("Selected weapon: 1");
     }
-    if keycode.just_pressed(KeyCode::Numpad2) {
+    if keycode.just_pressed(KeyCode::Digit2) {
         selection = Some(2);
+        println!("Selected weapon: 2");
     }
-    if keycode.just_pressed(KeyCode::Numpad3) {
+    if keycode.just_pressed(KeyCode::Digit3) {
         selection = Some(3);
+        println!("Selected weapon: 3");
     }
     if let Some(id) = selection {
         selected_weapon.id = id;
@@ -832,7 +875,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        MuzzleFlashEffect,
+        MuzzleFlashEffect(1),
     )).id();
     let mut gradient_muzzle_2 = bevy_hanabi::Gradient::new();
     gradient_muzzle_2.add_key(0.0, Vec4::new(0.8, 1.0, 1.0, 1.0));
@@ -889,10 +932,9 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        MuzzleFlashEffect,
+        MuzzleFlashEffect(2),
     )).id();
 
-    // --- Muzzle Effect 3: Heavy Weapon (Explosive burst & thick smoke) ---
     let mut gradient_muzzle_3 = bevy_hanabi::Gradient::new();
     gradient_muzzle_3.add_key(0.0, Vec4::new(1.0, 0.9, 0.5, 1.0));
     gradient_muzzle_3.add_key(0.1, Vec4::new(1.0, 0.4, 0.0, 1.0));
@@ -951,7 +993,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        MuzzleFlashEffect,
+        MuzzleFlashEffect(3),
     )).id();
 
     commands
@@ -959,21 +1001,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         .add_children(&[muzzle_flash, muzzle_effect_2, muzzle_effect_3]);
 }
 
-fn particle_effects_handling(keycode: Res<ButtonInput<KeyCode>>, selected_weapon: Res<SelectedWeapon>, mouse_button: Res<ButtonInput<MouseButton>>, mut thruster_spawners: Query<&mut EffectSpawner, (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<MuzzleFlashEffect>)>, mut muzzle_spawner: Query<(&mut EffectSpawner, &mut Transform), With<MuzzleFlashEffect>>) {
-    if mouse_button.just_pressed(MouseButton::Left) {
-        let current_weapon = selected_weapon.id;
-        let flash_scale = match current_weapon {
-            1 => 1.0,
-            2 => 1.5,
-            3 => 2.0,
-            _ => 1.0,
-        };
-        for (mut spawner, mut transform) in muzzle_spawner.iter_mut() {
-            transform.scale = Vec3::splat(flash_scale);
-            spawner.active = true;
-            spawner.reset();
-        }
-    }
+fn particle_effects_handling(keycode: Res<ButtonInput<KeyCode>>,  mut thruster_spawners: Query<&mut EffectSpawner, Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>
+) {
     if keycode.just_pressed(KeyCode::Space) {
         for mut spawner in thruster_spawners.iter_mut() {
             spawner.active = true;
@@ -1008,7 +1037,7 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn shooting(mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform), (With<MuzzleFlashEffect>, Without<Player>)>, mut fire_cooldown: Local<f32>, selected_weapon: Res<SelectedWeapon>, window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
+fn shooting(mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &MuzzleFlashEffect), Without<Player>>, mut fire_cooldown: Local<f32>, selected_weapon: Res<SelectedWeapon>, window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
     if *fire_cooldown > 0.0 {
         *fire_cooldown -= time.delta_secs();
     }
@@ -1059,10 +1088,12 @@ fn shooting(mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform), (W
     let ray_pos = player_transform.translation + Vec3::new(0.0, 0.75, 0.0) + *forward * 2.25;
     let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
     ray_handling(ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
-    for (mut spawner, mut transform) in shooting_effects.iter_mut() {
-        transform.scale = Vec3::splat(flash_scale);
-        spawner.active = true;
-        spawner.reset();
+    for (mut spawner, mut transform, muzzle) in shooting_effects.iter_mut() {
+        if muzzle.0 == current_weapon {
+            transform.scale = Vec3::splat(flash_scale);
+            spawner.active = true;
+            spawner.reset();
+        }
     }
 }
 
@@ -1091,6 +1122,7 @@ fn main() {
         }))
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
+        .add_plugins(UiMaterialPlugin::<WeaponSelectorUI>::default())
         .add_plugins(HanabiPlugin)
         .init_asset::<WeaponData>()
         .init_asset::<MuzzleFlash>()
@@ -1101,7 +1133,7 @@ fn main() {
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup))
-        .add_systems(Startup, (bot_spawn, jump_indicator, health_bar))
+        .add_systems(Startup, (bot_spawn, jump_indicator, health_bar, weapon_selector_setup))
         .add_systems(
             Update,
             (
@@ -1123,6 +1155,7 @@ fn main() {
                 particle_effects_handling,
                 player_death,
                 weapon_selector,
+                weapon_selector_handling,
             ),
         )
         .run();
