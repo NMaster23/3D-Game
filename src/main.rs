@@ -4,6 +4,8 @@ use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 use bevy_hanabi::*;
+use std::collections::HashMap;
+
 
 #[derive(Component)]
 pub struct Lighting;
@@ -110,6 +112,13 @@ struct SelectedWeapon {
     pub id: u32,
 }
 
+#[derive(Resource)]
+struct BotConfig {
+    pub accuracy_range: std::ops::Range<i32>,
+    pub disruptor_timer: Timer,
+    pub is_disrupted: bool,
+}
+
 #[derive(Component)]
 struct DespawnTimer(Timer);
 
@@ -125,10 +134,11 @@ struct BulletMagazine;
 #[derive(Component)]
 struct MuzzleFlashEffect;
 
-#[derive(Event)]
-pub struct BotFireEvent {
-    pub bot_entity: Entity,
+#[derive(Resource, Default)]
+struct PlayerWeapon {
+    pub weapons: HashMap<u32, Handle<WeaponData>>,
 }
+
 
 impl UiMaterial for JumpIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
@@ -142,9 +152,13 @@ impl UiMaterial for HealthBarUI {
     }
 }
 
-impl UiMaterial for ShotIndicator {
-    fn fragment_shader() -> bevy::shader::ShaderRef {
-        "shaders/shot_indicator.wgsl".into()
+impl Default for BotConfig {
+    fn default() -> Self {
+        Self {
+            accuracy_range: 1..25,
+            disruptor_timer: Timer::from_seconds(5.0, TimerMode::Once),
+            is_disrupted: false,
+        }
     }
 }
 
@@ -159,7 +173,7 @@ impl DerefMut for FloatingCrosshair {
 
 const MAX_BOUNCES: usize = 2;
 
-fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
+fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
     let mut ray = Ray3d::new(ray_pos, ray_dir);
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
@@ -173,7 +187,7 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: Mes
             break;
         };
         total_length += hit.distance;
-        if total_length > 10.0 {
+        if total_length > max_range {
             break;
         }
         let brightness = 1.0 + 10.0 * (1.0 - i as f32 / MAX_BOUNCES as f32);
@@ -189,8 +203,7 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, time: Res<Time>, mut ray_cast: Mes
                 break;
             }
             if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
-                bot_data.health -= 1;
-                println!("Health -1")
+                bot_data.health -= damage;
             }
             dir_y = 100.0 * dir_y.sin() - 15.0 * time.delta_secs();
         }
@@ -271,57 +284,20 @@ fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpInd
     }
 }
 
-fn gun_select_setup(mut weapons: ResMut<Assets<WeaponData>>, mut commands: Commands) {
-    weapons.add(WeaponData {
-        id: 0,
-        name: "Pistol".into(),
-        damage: 10,
-        range: 50.0,
-        fire_rate: 0.5,
-        power: 1.0,
-    });
-    weapons.add(WeaponData {
-        id: 1,
-        name: "Rifle".into(),
-        damage: 5,
-        range: 100.0,
-        fire_rate: 0.1,
-        power: 0.5,
-    });
-    weapons.add(WeaponData {
-        id: 2,
-        name: "Shotgun".into(),
-        damage: 20,
-        range: 30.0,
-        fire_rate: 1.0,
-        power: 2.0,
-    });
-    weapons.add(WeaponData {
-        id: 3,
-        name: "Missile Launcher".into(),
-        damage: 50,
-        range: 200.0,
-        fire_rate: 2.0,
-        power: 5.0,
-    });
-}
-
-fn gun_select_handling(mut selected: ResMut<SelectedWeapon>, keycode: Res<ButtonInput<KeyCode>>) {
-    if keycode.just_pressed(KeyCode::Digit1) {
-        selected.id = 0;
-        println!("Selected Pistol");
+fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResMut<SelectedWeapon>) {
+    let mut selection = None;
+    if keycode.just_pressed(KeyCode::Numpad1) {
+        selection = Some(1);
     }
-    if keycode.just_pressed(KeyCode::Digit2) {
-        selected.id = 1;
-        println!("Selected Rifle");
+    if keycode.just_pressed(KeyCode::Numpad2) {
+        selection = Some(2);
     }
-    if keycode.just_pressed(KeyCode::Digit3) {
-        selected.id = 2;
-        println!("Selected Shotgun");
+    if keycode.just_pressed(KeyCode::Numpad3) {
+        selection = Some(3);
     }
-    if keycode.just_pressed(KeyCode::Digit4) {
-        selected.id = 3;
-        println!("Selected Missile Launcher");
+    if let Some(id) = selection {
+        selected_weapon.id = id;
+        println!("Selected weapon: {}", id);
     }
 }
 
@@ -417,7 +393,7 @@ fn bot_handling(
     p_entity: Query<Entity, With<Player>>,
     parents: Query<&ChildOf>,
     mut effects: ResMut<Assets<EffectAsset>>,
-    mut bot_fire_events: EventWriter<BotFireEvent>,
+    bot_config: Res<BotConfig>,
 ) {
     let Ok((pt, mut pd)) = p.single_mut() else { return; };
     let pos: Vec<_> = q.iter().map(|(e, t, _, _, _)| (e, t.translation)).collect();
@@ -438,22 +414,23 @@ fn bot_handling(
             let Ok(player_entity) = p_entity.single() else { continue; };
             if b.fire_timer.tick(time.delta()).just_finished() {
                 let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
-                let ray = Ray3d::new(t.translation, ray_dir);
+                let ray = Ray3d::new(t.translation + Vec3::new(0.0, 0.75, 0.0), ray_dir);
                 let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
                 let hit_number = 1;
-                let hit_chance = rand::rng().random_range(1..25);
+                let hit_chance = rand::rng().random_range(bot_config.accuracy_range.clone());
                 if hit_number == hit_chance {
-                    bot_fire_events.send(BotFireEvent { bot_entity: e });
+                    
                     for (hit_entity, hit_data) in hits {
+                        // Stop checking if the target is out of the bot's range (e.g. 30.0 units)
+                        if hit_data.distance > 30.0 {
+                            break;
+                        }
                         let mut current_entity = *hit_entity;
                         let mut hit_self = false;
                         let mut hit_player = false;
                         loop {
                             if current_entity == player_entity {
                                 hit_player = true;
-                                pd.health -= 4;
-                                println!("Player hit! Health: {}", pd.health);
-                                break;
                             }
                             if current_entity == e {
                                 hit_self = true;
@@ -493,12 +470,19 @@ fn despawn_ray(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &m
     }
 }
 
-fn targeting_disruptor(keycode: Res<ButtonInput<KeyCode>>) {
-    if !keycode.just_pressed(KeyCode::KeyT) {
-        return;
+fn targeting_disruptor(keycode: Res<ButtonInput<KeyCode>>, mut bot_config: ResMut<BotConfig>, time: Res<Time>) {
+    if bot_config.is_disrupted {
+        if bot_config.disruptor_timer.tick(time.delta()).just_finished() {
+            bot_config.is_disrupted = false;
+            bot_config.accuracy_range = 1..25;
+            println!("Targeting systems restored.");
+        }
+    } else if keycode.just_pressed(KeyCode::KeyT) {
+        bot_config.is_disrupted = true;
+        bot_config.disruptor_timer.reset();
+        bot_config.accuracy_range = 1..100;
+        println!("Targeting systems disrupted!");
     }
-    println!("Targeting Disruptor Activated! Bot accuracy has been reduced for 5 seconds.");
-    
 }
 
 fn setup_scene_once_loaded(
@@ -706,7 +690,7 @@ fn setup(
     let sky = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment/Sky.glb"));
     commands.spawn((
         SceneRoot(sky),
-        Transform::from_scale(Vec3::splat(200.0)),
+        Transform::from_xyz(0.0, -10.0, 0.0).with_scale(Vec3::splat(2000.0)),
     ));
     commands.spawn(Node {
         width: Val::Percent(100.0),
@@ -722,7 +706,6 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let Ok(player) = player_query.single() else {
         return;
     };
-    println!("Sucessfully spawned player, setting up particle effects...");
     let mut gradient_thruster = bevy_hanabi::Gradient::new();
     gradient_thruster.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
     gradient_thruster.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
@@ -817,7 +800,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         center: module.lit(Vec3::new(0.0, 0.0, -1.0)),
         speed: module.lit(15.0),
     };
-    let lifetime = module.lit(0.5);
+    let lifetime = module.lit(1.5);
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
@@ -844,7 +827,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let muzzle_flash = commands.spawn((
         Name::new("Muzzle Flash"),
         ParticleEffect::new(muzzle_effect),
-        Transform::from_xyz(0.3, 1.0, 1.5), 
+        Transform::from_xyz(0.0, 2.0, -0.5), 
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
@@ -856,15 +839,26 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         .add_children(&[muzzle_flash]);
 }
 
-fn particle_effects_handling(mut bot_fire_events: EventReader<BotFireEvent>, keycode: Res<ButtonInput<KeyCode>>, mut mouse_button: Res<ButtonInput<MouseButton>>, mut thruster_spawners: Query<&mut EffectSpawner, (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<MuzzleFlashEffect>)>, mut muzzle_spawner: Query<&mut EffectSpawner, With<MuzzleFlashEffect>>) {
-    if mouse_button.just_pressed(MouseButton::Left) {    
-        for mut spawner in muzzle_spawner.iter_mut() {
+fn particle_effects_handling(keycode: Res<ButtonInput<KeyCode>>, selected_weapon: Res<SelectedWeapon>, mouse_button: Res<ButtonInput<MouseButton>>, mut thruster_spawners: Query<&mut EffectSpawner, (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<MuzzleFlashEffect>)>, mut muzzle_spawner: Query<(&mut EffectSpawner, &mut Transform), With<MuzzleFlashEffect>>) {
+    if mouse_button.just_pressed(MouseButton::Left) {
+        let current_weapon = selected_weapon.id;
+        let flash_scale = match current_weapon {
+            1 => 1.0,
+            2 => 1.5,
+            3 => 2.0,
+            _ => 1.0,
+        };
+        for (mut spawner, mut transform) in muzzle_spawner.iter_mut() {
+            transform.scale = Vec3::splat(flash_scale);
             spawner.active = true;
             spawner.reset();
         }
     }
-    for event in bot_fire_events.read() {
-        println!("Bot fired! Triggering particle effect for bot entity: {:?}", event.bot_entity);
+    if keycode.just_pressed(KeyCode::Space) {
+        for mut spawner in thruster_spawners.iter_mut() {
+            spawner.active = true;
+            spawner.reset();
+        }
     }
 }
 
@@ -894,10 +888,23 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
+fn shooting(selected_weapon: Res<SelectedWeapon>, window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
     if !mouse_button.just_pressed(MouseButton::Left) { return; }
     let Ok(mut player_transform) = player_query.single_mut() else {
         return;
+    };
+    let current_weapon = selected_weapon.id;
+    let max_range = match current_weapon {
+        1 => 50.0,
+        2 => 100.0,
+        3 => 175.0,
+        _ => 50.0,
+    };
+    let damage = match current_weapon {
+        1 => 1,
+        2 => 10,
+        3 => 50,
+        _ => 1,
     };
     let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
     let (inner_camera, camera_transform) = *camera;
@@ -905,14 +912,23 @@ fn shooting(window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform),
     let target = if let Some((_, hit)) = ray_cast.cast_ray(camera_ray, &MeshRayCastSettings::default()).first() {
         hit.point
     } else {
-        camera_ray.origin + *camera_ray.direction * 100.0
+        camera_ray.origin + *camera_ray.direction * max_range
     };
     let crosshair_pos = Vec3::new(crosshair.x, 0.0, crosshair.y);
     crosshair.y -= 200.0;
     let forward = -player_transform.forward();
-    let ray_pos = player_transform.translation + *forward * 2.25;
+    let ray_pos = player_transform.translation + Vec3::new(0.0, 0.75, 0.0) + *forward * 2.25;
     let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
-    ray_handling(ray_pos, dir, time, ray_cast, &mut gizmos, query, parent);
+    ray_handling(ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
+}
+
+fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With<Player>>) {
+    if let Ok((entity, player_data)) = query.single() {
+        if player_data.health <= 0 {
+            commands.entity(entity).despawn();
+            println!("Player has died!");
+        }
+    }
 }
 
 fn main() {
@@ -931,17 +947,16 @@ fn main() {
         }))
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
-        .add_plugins(UiMaterialPlugin::<ShotIndicator>::default())
         .add_plugins(HanabiPlugin)
-        .add_event::<BotFireEvent>()
         .init_asset::<WeaponData>()
         .init_asset::<MuzzleFlash>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .init_resource::<SelectedWeapon>()
+        .init_resource::<BotConfig>()
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
-        .add_systems(Startup, (spawn_player, setup, gun_select_setup))
+        .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, (bot_spawn, jump_indicator, health_bar))
         .add_systems(
             Update,
@@ -958,11 +973,12 @@ fn main() {
                 botdead,
                 jump_indicator_handling,
                 health_bar_handling,
-                gun_select_handling,
                 despawn_ray,
                 targeting_disruptor,
                 particle_effects,
                 particle_effects_handling,
+                player_death,
+                weapon_selector,
             ),
         )
         .run();
