@@ -248,7 +248,7 @@ fn ray_handling(mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut Backgro
                 break;
             }
             if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
-                let mut final_damage = (damage as f32 * (1.0 - total_length / max_range)).max(100.0) as i32;
+                let mut final_damage = (damage as f32 * (1.0 - total_length / max_range)).max(1.0) as i32;
                 bot_data.health -= final_damage;
                 timer.0.reset();
                 println!("Bot hit! Damage: {}, Distance: {:.2}", final_damage, total_length);
@@ -553,7 +553,7 @@ fn bot_handling(
                         }
                         if hit_player {
                             gizmos.line(t.translation, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
-                            let damage = (15 as f32 * (1.0 - total_length / max_range)).max(15.0) as i32;
+                            let damage = (15 as f32 * (1.0 - total_length / max_range)).max(1.0) as i32;
                             pd.health -= damage;
                             println!("Player hit! Health: {}, Distance: {:.2}", pd.health, hit_data.distance);
                             let flash = materials.add(projectileFlash {
