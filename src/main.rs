@@ -248,8 +248,10 @@ fn ray_handling(mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut Backgro
                 break;
             }
             if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
-                bot_data.health -= damage;
+                let mut final_damage = (damage as f32 * (1.0 - total_length / max_range)).max(100.0) as i32;
+                bot_data.health -= final_damage;
                 timer.0.reset();
+                println!("Bot hit! Damage: {}, Distance: {:.2}", final_damage, total_length);
                 for mut color in &mut query {
                     color.0 = Color::srgba(1.0, 1.0, 1.0, 0.75);
                 }
@@ -513,14 +515,19 @@ fn bot_handling(
             lv.z = c.move_direction.z + rand::rng().random_range(-5.0..5.0);
             let Ok(player_entity) = p_entity.single() else { continue; };
             if b.fire_timer.tick(time.delta()).just_finished() {
+                let mut total_length = 0.0;
+                let max_range = 100.0;
                 let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
                 let ray = Ray3d::new(t.translation + Vec3::new(0.0, 0.75, 0.0), ray_dir);
                 let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
                 let hit_number = 1;
                 let hit_chance = rand::rng().random_range(bot_config.accuracy_range.clone());
                 if hit_number == hit_chance {
-                    
                     for (hit_entity, hit_data) in hits {
+                        total_length += hit_data.distance;
+                        if total_length > max_range {
+                            break;
+                        }
                         if hit_data.distance > 30.0 {
                             break;
                         }
@@ -546,8 +553,9 @@ fn bot_handling(
                         }
                         if hit_player {
                             gizmos.line(t.translation, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
-                            pd.health -= 10;
-                            println!("Player hit! Health: {}", pd.health);
+                            let damage = (15 as f32 * (1.0 - total_length / max_range)).max(15.0) as i32;
+                            pd.health -= damage;
+                            println!("Player hit! Health: {}, Distance: {:.2}", pd.health, hit_data.distance);
                             let flash = materials.add(projectileFlash {
                                 power: 1.0,
                                 color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
@@ -688,9 +696,9 @@ fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshai
     rotation.x += -mouse_movement.delta.x * sens;
     rotation.y += mouse_movement.delta.y * sens;
     rotation.y = rotation.y.clamp(-14.9, 89.9);
-    **crosshair_offset += mouse_movement.delta * 0.5;
-    **crosshair_offset = crosshair_offset.lerp(Vec2::ZERO, 0.02);
-    **crosshair_offset = crosshair_offset.clamp(Vec2::splat(-150.0), Vec2::splat(150.0));
+    crosshair_offset.0 += mouse_movement.delta * 0.5;
+    crosshair_offset.0 = crosshair_offset.lerp(Vec2::ZERO, 0.02);
+    crosshair_offset.0 = crosshair_offset.clamp(Vec2::splat(-150.0), Vec2::splat(150.0));
     if let Ok(mut node) = query.single_mut() {
         node.left = Val::Px(crosshair_offset.x);
         node.top = Val::Px(crosshair_offset.y - 100.0);
@@ -732,7 +740,7 @@ fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshai
 }
 
 fn crosshair_spread(mut query: Query<&mut Node, With<Crosshair>>, time: Res<Time>, mut spread: ResMut<CrosshairSpread>) {
-    spread.spread += (0.0 - spread.spread) * (8.0 * time.delta_secs()).min(1.0);
+    spread.spread += (0.0 - spread.spread) * (3.0 * time.delta_secs()).min(1.0);
     for mut node in &mut query {
         node.width = Val::Px(24.0 + spread.spread);
         node.height = Val::Px(24.0 + spread.spread);
@@ -1034,7 +1042,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     
     let projectile_effect_3_base = effects.add(
-        EffectAsset::new(63000, SpawnerSettings::once(800.0.into()), module) // Extremely high particle count
+        EffectAsset::new(63000, SpawnerSettings::once(800.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Blend) 
             .init(init_pos)
@@ -1172,7 +1180,7 @@ fn shooting(timer: ResMut<HitmarkerTimer>,
         _ => 0.4,
     };
     let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
-    let (inner_camera, camera_transform) = *camera;
+    let (inner_camera, camera_transform) = camera.into_inner();
     let Ok(camera_ray) = inner_camera.viewport_to_world(camera_transform, in_screen_pos) else { return; };
     let target = if let Some((_, hit)) = ray_cast.cast_ray(camera_ray, &MeshRayCastSettings::default()).first() {
         hit.point
@@ -1183,7 +1191,7 @@ fn shooting(timer: ResMut<HitmarkerTimer>,
     let forward = -player_transform.forward();
     let ray_pos = player_transform.translation + Vec3::new(0.0, 0.75, 0.0) + *forward * 2.25;
     
-    let total_spread = base_spread + (crosshair_spread.spread * 0.003); // Doubled crosshair spread penalty
+    let total_spread = base_spread + (crosshair_spread.spread * 0.2);
     let mut dir_vec = (target - ray_pos).normalize_or_zero();
     if dir_vec == Vec3::ZERO { dir_vec = *camera_ray.direction; }
     
@@ -1193,7 +1201,6 @@ fn shooting(timer: ResMut<HitmarkerTimer>,
         dir_vec.z += rand::rng().random_range(-total_spread..total_spread);
     }
     let dir = Dir3::new(dir_vec).unwrap_or(camera_ray.direction);
-    
     ray_handling(timer, q, ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
     for (mut spawner, mut transform, projectile) in shooting_effects.iter_mut() {
         if projectile.0 == current_weapon {
@@ -1282,7 +1289,6 @@ fn main() {
                 weapon_selector,
                 crosshair_spread,
                 hitmarker,
-                muzzle_flash,
                 screen_shake.after(camera_positioning),
             ),
         )
