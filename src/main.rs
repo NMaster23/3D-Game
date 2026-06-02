@@ -375,15 +375,7 @@ fn weapon_selector_setup(mut commands: Commands, mut materials: ResMut<Assets<We
     ));
 }
 
-fn weapon_selector_handling(selected_weapon: Res<SelectedWeapon>, mut materials: ResMut<Assets<WeaponSelectorUI>>) {
-    if selected_weapon.is_changed() {
-        for (_, material) in materials.iter_mut() {
-            material.selected_weapon = selected_weapon.id;
-        }
-    }
-}
-
-fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResMut<SelectedWeapon>) {
+fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResMut<SelectedWeapon>, mut materials: ResMut<Assets<WeaponSelectorUI>>) {
     let mut selection = None;
     if keycode.just_pressed(KeyCode::Digit1) {
         selection = Some(1);
@@ -400,6 +392,11 @@ fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResM
     if let Some(id) = selection {
         selected_weapon.id = id;
         println!("Selected weapon: {}", id);
+    }
+    if selected_weapon.is_changed() {
+        for (_, material) in materials.iter_mut() {
+            material.selected_weapon = selected_weapon.id;
+        }
     }
 }
 
@@ -1073,31 +1070,16 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         .add_children(&[projectile_flash, projectile_effect_2, projectile_effect_3]);
 }
 
-fn muzzle_flash(mut commands: Commands, weapon_transform: Transform) {
-    commands.spawn((
-        PointLight {
-            intensity: 5000.0,
-            range: 5.0,
-            color: Color::WHITE,
-            shadows_enabled: false,
-            ..default()
-        },
-        Transform::from_translation(weapon_transform.translation),
-        DespawnTimer(Timer::from_seconds(0.05, TimerMode::Once)),
-    ));
-    
-}
-
 fn screen_shake(mut camera: Query<&mut Transform, With<Camera>>, mut commands: Commands, time: Res<Time>, mut shake: ResMut<ScreenShake>) {
     if shake.strength > 0.01 {
         if let Ok(mut transform) = camera.single_mut() {
             transform.translation += Vec3::new(
-                rand::rng().random_range(-shake.strength..shake.strength),
-                rand::rng().random_range(-shake.strength..shake.strength),
-                rand::rng().random_range(-shake.strength..shake.strength),
+                rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
+                rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
+                rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
             );
         }
-        shake.strength *= 0.8_f32.powf(time.delta_secs());
+            shake.strength *= 0.05_f32.powf(time.delta_secs());
     } else {
         shake.strength = 0.0;
     }
@@ -1183,6 +1165,12 @@ fn shooting(timer: ResMut<HitmarkerTimer>,
         3 => 1.0,
         _ => 0.2,
     };
+    let base_spread = match current_weapon {
+        1 => 0.4,
+        2 => 0.72,
+        3 => 0.20,
+        _ => 0.4,
+    };
     let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
     let (inner_camera, camera_transform) = *camera;
     let Ok(camera_ray) = inner_camera.viewport_to_world(camera_transform, in_screen_pos) else { return; };
@@ -1194,7 +1182,18 @@ fn shooting(timer: ResMut<HitmarkerTimer>,
     crosshair.y -= 200.0;
     let forward = -player_transform.forward();
     let ray_pos = player_transform.translation + Vec3::new(0.0, 0.75, 0.0) + *forward * 2.25;
-    let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
+    
+    let total_spread = base_spread + (crosshair_spread.spread * 0.003); // Doubled crosshair spread penalty
+    let mut dir_vec = (target - ray_pos).normalize_or_zero();
+    if dir_vec == Vec3::ZERO { dir_vec = *camera_ray.direction; }
+    
+    if total_spread > 0.0 {
+        dir_vec.x += rand::rng().random_range(-total_spread..total_spread);
+        dir_vec.y += rand::rng().random_range(-total_spread..total_spread);
+        dir_vec.z += rand::rng().random_range(-total_spread..total_spread);
+    }
+    let dir = Dir3::new(dir_vec).unwrap_or(camera_ray.direction);
+    
     ray_handling(timer, q, ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
     for (mut spawner, mut transform, projectile) in shooting_effects.iter_mut() {
         if projectile.0 == current_weapon {
@@ -1273,15 +1272,19 @@ fn main() {
                 despawn_ray,
                 targeting_disruptor,
                 player_death,
-            ),
-        )
-        .add_systems(Update, (
                 botdead,
                 particle_effects,
-                crosshair_spread,
-                weapon_selector_handling,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
+                weapon_selector,
                 crosshair_spread,
                 hitmarker,
-        ))
+                muzzle_flash,
+                screen_shake.after(camera_positioning),
+            ),
+        )
         .run();
 }
