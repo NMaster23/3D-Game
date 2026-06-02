@@ -1,11 +1,11 @@
-use bevy::{color::palettes::css, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{color::palettes::css::{self, WHITE_SMOKE}, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, SystemCursorIcon::Pointer, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
-use bevy_hanabi::*;
 use std::collections::HashMap;
-
+use bevy_rich_text3d::*;
+use bevy_hanabi::prelude::*;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -30,7 +30,7 @@ pub struct HealthBarUI {
 }
 
 #[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
-pub struct MuzzleFlash {
+pub struct projectileFlash {
     #[uniform(0)]
     pub power: f32,
     #[uniform(0)]
@@ -132,7 +132,7 @@ struct Animations {
 struct BulletMagazine;
 
 #[derive(Component)]
-struct MuzzleFlashEffect(pub u32);
+struct projectileFlashEffect(pub u32);
 
 #[derive(Resource, Default)]
 struct PlayerWeapon {
@@ -143,6 +143,34 @@ struct PlayerWeapon {
 pub struct WeaponSelectorUI {
     #[uniform(0)]
     pub selected_weapon: u32,
+    #[texture(1)]
+    #[sampler(2)]
+    pub weapon1: Handle<Image>,
+    #[texture(3)]
+    #[sampler(4)]
+    pub weapon2: Handle<Image>,
+    #[texture(5)]
+    #[sampler(6)]
+    pub weapon3: Handle<Image>,
+}
+
+#[derive(Resource)]
+pub struct LivingBots(pub u32);
+
+#[derive(Resource)]
+struct ScreenShake {
+    strength: f32,
+}
+
+#[derive(Resource, Component)]
+struct Hitmarker;
+
+#[derive(Resource)]
+struct HitmarkerTimer(Timer);
+
+#[derive(Resource)]
+struct CrosshairSpread {
+    spread: f32,
 }
 
 impl UiMaterial for JumpIndicator {
@@ -166,7 +194,7 @@ impl UiMaterial for WeaponSelectorUI {
 impl Default for BotConfig {
     fn default() -> Self {
         Self {
-            accuracy_range: 1..25,
+            accuracy_range: 1..15,
             disruptor_timer: Timer::from_seconds(5.0, TimerMode::Once),
             is_disrupted: false,
         }
@@ -190,7 +218,7 @@ impl DerefMut for FloatingCrosshair {
 
 const MAX_BOUNCES: usize = 2;
 
-fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
+fn ray_handling(mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, mut ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
     let mut ray = Ray3d::new(ray_pos, ray_dir);
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
@@ -221,6 +249,10 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time:
             }
             if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
                 bot_data.health -= damage;
+                timer.0.reset();
+                for mut color in &mut query {
+                    color.0 = Color::srgba(1.0, 1.0, 1.0, 0.75);
+                }
             }
             dir_y = 100.0 * dir_y.sin() - 15.0 * time.delta_secs();
         }
@@ -228,11 +260,30 @@ fn ray_handling(ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time:
     gizmos.linestrip_gradient(intersections);
 }
 
-fn botdead(mut query: Query<(&BotData, &mut Transform), Changed<BotData>>) {
-    for (botdata, mut transform) in query.iter_mut() {
-        if botdata.health < 0 {
+fn botdead(mut player_data: Query<&mut Transform, With<Player>>, mut commands: Commands, mut query: Query<(Entity, &BotData, &mut Transform), (Changed<BotData>, Without<Player>)>, mut living_bots: ResMut<LivingBots>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let Ok(player_transform) = player_data.single() else {
+        return;
+    };
+    for (entity, botdata, mut transform) in query.iter_mut() {
+        if botdata.health <= 0 {
             transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
             transform.translation.y = 0.5;
+            commands.entity(entity).remove::<BotData>();
+            living_bots.0 -= 1;
+        }
+        if living_bots.0 == 0 {
+            commands.spawn((
+                Text3d::new("Hello, World!"),
+                Mesh3d::default(),
+                MeshMaterial3d(materials.add(
+                    StandardMaterial {
+                        base_color_texture: Some(TextAtlas::DEFAULT_IMAGE.clone()),
+                        alpha_mode: bevy::prelude::AlphaMode::Blend,
+                        ..Default::default()
+                    }
+                )),
+                Transform::from_xyz(player_transform.translation.x, player_transform.translation.y, player_transform.translation.z).with_scale(Vec3::splat(10.0)),
+            ));
         }
     }
 }
@@ -301,18 +352,26 @@ fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpInd
     }
 }
 
-fn weapon_selector_setup(mut commands: Commands, mut materials: ResMut<Assets<WeaponSelectorUI>>) {
+fn weapon_selector_setup(mut commands: Commands, mut materials: ResMut<Assets<WeaponSelectorUI>>, asset_server: Res<AssetServer>) { 
+    let ui_material = WeaponSelectorUI { 
+        selected_weapon: 1,
+        weapon1: asset_server.load("Pistol.png"),
+        weapon2: asset_server.load("Rifle.png"),
+        weapon3: asset_server.load("Rocket.png"),
+    };
+
     commands.spawn((
-        MaterialNode(materials.add(WeaponSelectorUI { selected_weapon: 1 })),
+        MaterialNode(materials.add(ui_material.clone())),
         Node {
             width: Val::Px(1000.0),
-            height: Val::Px(1000.0),
+            height: Val::Px(250.0),
             position_type: PositionType::Absolute,
-            top: Val::Px(30.0),
-            left: Val::Px(30.0),
+            top: Val::Px(720.0),
+            left: Val::Percent(50.0),
+            margin: UiRect::left(Val::Px(-500.0)),
             ..Default::default()
         },
-        WeaponSelectorUI { selected_weapon: 1 },
+        ui_material,
     ));
 }
 
@@ -387,7 +446,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
 }
 
 fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut effects: ResMut<Assets<EffectAsset>>) {
-    let bot_number = 10;
+    let bot_number = 1;
     let mut rng = rand::rng();
     let hits = rng.random_range(1..20);
     let hits_num = rng.random_range(1..5);
@@ -399,6 +458,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
         hit_number: hits_num,
         fire_timer: Timer::from_seconds(1.0, TimerMode::Repeating),
     };
+    commands.insert_resource(LivingBots(bot_number));
     for i in 0..bots.bot_quantity {
         bots.bot_offset = i as f32 * bots.bot_quantity as f32 - 10.0;
         let bot = commands.spawn((
@@ -428,7 +488,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
 fn bot_handling(
     time: Res<Time>,
     mut commands: Commands,
-    mut materials: ResMut<Assets<MuzzleFlash>>,
+    mut materials: ResMut<Assets<projectileFlash>>,
     mut ray_cast: MeshRayCast,
     mut gizmos: Gizmos,
     mut q: Query<(Entity, &mut Transform, &mut CharacterController, &mut BotData, &mut LinearVelocity), (With<Bots>, Without<Player>)>,
@@ -464,7 +524,6 @@ fn bot_handling(
                 if hit_number == hit_chance {
                     
                     for (hit_entity, hit_data) in hits {
-                        // Stop checking if the target is out of the bot's range (e.g. 30.0 units)
                         if hit_data.distance > 30.0 {
                             break;
                         }
@@ -490,9 +549,9 @@ fn bot_handling(
                         }
                         if hit_player {
                             gizmos.line(t.translation, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
-                            pd.health -= 4;
+                            pd.health -= 10;
                             println!("Player hit! Health: {}", pd.health);
-                            let flash = materials.add(MuzzleFlash {
+                            let flash = materials.add(projectileFlash {
                                 power: 1.0,
                                 color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
                             });
@@ -517,7 +576,7 @@ fn targeting_disruptor(keycode: Res<ButtonInput<KeyCode>>, mut bot_config: ResMu
     if bot_config.is_disrupted {
         if bot_config.disruptor_timer.tick(time.delta()).just_finished() {
             bot_config.is_disrupted = false;
-            bot_config.accuracy_range = 1..25;
+            bot_config.accuracy_range = 1..15;
             println!("Targeting systems restored.");
         }
     } else if keycode.just_pressed(KeyCode::KeyT) {
@@ -675,6 +734,14 @@ fn camera_positioning(mut query: Query<&mut Node, With<Crosshair>>, mut crosshai
     }
 }
 
+fn crosshair_spread(mut query: Query<&mut Node, With<Crosshair>>, time: Res<Time>, mut spread: ResMut<CrosshairSpread>) {
+    spread.spread += (0.0 - spread.spread) * (8.0 * time.delta_secs()).min(1.0);
+    for mut node in &mut query {
+        node.width = Val::Px(24.0 + spread.spread);
+        node.height = Val::Px(24.0 + spread.spread);
+    }
+}
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -750,15 +817,15 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         return;
     };
     let mut gradient_thruster = bevy_hanabi::Gradient::new();
-    gradient_thruster.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
-    gradient_thruster.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
-    gradient_thruster.add_key(0.6, Vec4::new(0.0, 0.2, 0.7, 0.5));
+    gradient_thruster.add_key(0.0, Vec4::new(0.8, 1.0, 1.0, 1.0));
+    gradient_thruster.add_key(0.15, Vec4::new(0.0, 1.0, 1.0, 1.0));
+    gradient_thruster.add_key(0.6, Vec4::new(0.0, 0.4, 0.8, 0.5));
     gradient_thruster.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
 
     let mut size_thruster = bevy_hanabi::Gradient::new();
-    size_thruster.add_key(0.0, Vec3::splat(0.5));
-    size_thruster.add_key(0.15, Vec3::splat(0.8));
-    size_thruster.add_key(0.7, Vec3::splat(0.3));
+    size_thruster.add_key(0.0, Vec3::splat(0.4));
+    size_thruster.add_key(0.15, Vec3::splat(0.6));
+    size_thruster.add_key(0.7, Vec3::splat(0.2));
     size_thruster.add_key(1.0, Vec3::splat(0.0));
     let mut module = Module::default();
     let accel = module.lit(Vec3::new(0., -10., 0.));
@@ -770,15 +837,15 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     };
     let init_vel = SetVelocitySphereModifier {
         center: module.lit(Vec3::new(0.0, 1.0, 0.0)),
-        speed: module.lit(15.0),
+        speed: module.lit(10.0),
     };
-    let lifetime = module.lit(0.1);
+    let lifetime = module.lit(0.4);
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     let bottom_thruster = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
-            .with_simulation_space(SimulationSpace::Local)
+            .with_simulation_space(SimulationSpace::Global)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
@@ -799,7 +866,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let thruster_left = commands.spawn((
         Name::new("Thruster Left"),
         ParticleEffect::new(bottom_thruster.clone()),
-        Transform::from_xyz(-0.3, 0.0, 0.0),
+        EffectSpawner::default(),
+        Transform::from_xyz(-0.3, -1.0, 0.0),
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
@@ -809,7 +877,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let thruster_right = commands.spawn((
         Name::new("Thruster Right"),
         ParticleEffect::new(bottom_thruster),
-        Transform::from_xyz(0.3, 0.0, 0.0),
+        EffectSpawner::default(),
+        Transform::from_xyz(0.3, -1.0, 0.0),
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
@@ -820,17 +889,17 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         .entity(player)
         .add_children(&[thruster_left, thruster_right]);
     
-    let mut gradient_muzzle = bevy_hanabi::Gradient::new();
-    gradient_muzzle.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
-    gradient_muzzle.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
-    gradient_muzzle.add_key(0.6, Vec4::new(0.0, 0.2, 0.7, 0.5));
-    gradient_muzzle.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
+    let mut gradient_projectile = bevy_hanabi::Gradient::new();
+    gradient_projectile.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
+    gradient_projectile.add_key(0.15, Vec4::new(0.0, 0.843, 1.0, 1.0));
+    gradient_projectile.add_key(0.6, Vec4::new(0.0, 0.2, 0.7, 0.5));
+    gradient_projectile.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
 
-    let mut size_muzzle = bevy_hanabi::Gradient::new();
-    size_muzzle.add_key(0.0, Vec3::splat(0.2));
-    size_muzzle.add_key(0.05, Vec3::splat(1.5));
-    size_muzzle.add_key(0.2, Vec3::splat(0.8));
-    size_muzzle.add_key(1.0, Vec3::splat(0.0));
+    let mut size_projectile = bevy_hanabi::Gradient::new();
+    size_projectile.add_key(0.0, Vec3::splat(0.2));
+    size_projectile.add_key(0.05, Vec3::splat(1.5));
+    size_projectile.add_key(0.2, Vec3::splat(0.8));
+    size_projectile.add_key(1.0, Vec3::splat(0.0));
     let mut module = Module::default();
     let accel = module.lit(Vec3::new(0., 0., 0.));
     let update_accel = AccelModifier::new(accel);
@@ -847,7 +916,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
-    let muzzle_effect_base = effects.add(
+    let projectile_effect_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
@@ -857,37 +926,38 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             .init(init_size)
             .init(init_color)
             .render(ColorOverLifetimeModifier {
-                gradient: gradient_muzzle,
+                gradient: gradient_projectile,
                 ..Default::default()
             })
             .render(SizeOverLifetimeModifier {
-                gradient: size_muzzle,
+                gradient: size_projectile,
                 screen_space_size: false,
                 ..Default::default()
             })
             .update(update_accel)
     );
-    let muzzle_flash = commands.spawn((
-        Name::new("Muzzle Flash"),
-        ParticleEffect::new(muzzle_effect_base),
+    let projectile_flash = commands.spawn((
+        Name::new("projectile Flash"),
+        ParticleEffect::new(projectile_effect_base),
+        EffectSpawner::default(),
         Transform::from_xyz(0.0, 2.0, -0.5), 
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        MuzzleFlashEffect(1),
+        projectileFlashEffect(1),
     )).id();
-    let mut gradient_muzzle_2 = bevy_hanabi::Gradient::new();
-    gradient_muzzle_2.add_key(0.0, Vec4::new(0.8, 1.0, 1.0, 1.0));
-    gradient_muzzle_2.add_key(0.1, Vec4::new(0.0, 1.0, 0.8, 1.0));
-    gradient_muzzle_2.add_key(0.5, Vec4::new(0.0, 0.5, 0.2, 0.8));
-    gradient_muzzle_2.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
+    let mut gradient_projectile_2 = bevy_hanabi::Gradient::new();
+    gradient_projectile_2.add_key(0.0, Vec4::new(0.8, 1.0, 1.0, 1.0));
+    gradient_projectile_2.add_key(0.1, Vec4::new(0.0, 1.0, 0.8, 1.0));
+    gradient_projectile_2.add_key(0.5, Vec4::new(0.0, 0.5, 0.2, 0.8));
+    gradient_projectile_2.add_key(1.0, Vec4::new(0.0, 0.0, 0.0, 0.0));
 
-    let mut size_muzzle_2 = bevy_hanabi::Gradient::new();
-    size_muzzle_2.add_key(0.0, Vec3::splat(0.1));
-    size_muzzle_2.add_key(0.05, Vec3::splat(0.6));
-    size_muzzle_2.add_key(0.2, Vec3::splat(0.1));
-    size_muzzle_2.add_key(1.0, Vec3::splat(0.0));
+    let mut size_projectile_2 = bevy_hanabi::Gradient::new();
+    size_projectile_2.add_key(0.0, Vec3::splat(0.1));
+    size_projectile_2.add_key(0.05, Vec3::splat(0.6));
+    size_projectile_2.add_key(0.2, Vec3::splat(0.1));
+    size_projectile_2.add_key(1.0, Vec3::splat(0.0));
     let mut module = Module::default();
     let accel = module.lit(Vec3::new(0., 0., 0.));
     let update_accel = AccelModifier::new(accel);
@@ -904,7 +974,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
     let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
-    let muzzle_effect_2_base = effects.add(
+    let projectile_effect_2_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
@@ -914,38 +984,39 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             .init(init_size)
             .init(init_color)
             .render(ColorOverLifetimeModifier {
-                gradient: gradient_muzzle_2,
+                gradient: gradient_projectile_2,
                 ..Default::default()
             })
             .render(SizeOverLifetimeModifier {
-                gradient: size_muzzle_2,
+                gradient: size_projectile_2,
                 screen_space_size: false,
                 ..Default::default()
             })
             .update(update_accel)
     );
-    let muzzle_effect_2 = commands.spawn((
-        Name::new("Muzzle Effect 2"),
-        ParticleEffect::new(muzzle_effect_2_base),
+    let projectile_effect_2 = commands.spawn((
+        Name::new("projectile Effect 2"),
+        ParticleEffect::new(projectile_effect_2_base),
+        EffectSpawner::default(),
         Transform::from_xyz(0.0, 2.0, -0.5), 
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        MuzzleFlashEffect(2),
+        projectileFlashEffect(2),
     )).id();
 
-    let mut gradient_muzzle_3 = bevy_hanabi::Gradient::new();
-    gradient_muzzle_3.add_key(0.0, Vec4::new(1.0, 0.9, 0.5, 1.0));
-    gradient_muzzle_3.add_key(0.1, Vec4::new(1.0, 0.4, 0.0, 1.0));
-    gradient_muzzle_3.add_key(0.3, Vec4::new(0.2, 0.2, 0.2, 0.8));
-    gradient_muzzle_3.add_key(1.0, Vec4::new(0.1, 0.1, 0.1, 0.0));
+    let mut gradient_projectile_3 = bevy_hanabi::Gradient::new();
+    gradient_projectile_3.add_key(0.0, Vec4::new(1.0, 0.9, 0.5, 1.0));
+    gradient_projectile_3.add_key(0.1, Vec4::new(1.0, 0.4, 0.0, 1.0));
+    gradient_projectile_3.add_key(0.3, Vec4::new(0.2, 0.2, 0.2, 0.8));
+    gradient_projectile_3.add_key(1.0, Vec4::new(0.1, 0.1, 0.1, 0.0));
 
-    let mut size_muzzle_3 = bevy_hanabi::Gradient::new();
-    size_muzzle_3.add_key(0.0, Vec3::splat(0.5));
-    size_muzzle_3.add_key(0.1, Vec3::splat(2.5));
-    size_muzzle_3.add_key(0.4, Vec3::splat(1.5));
-    size_muzzle_3.add_key(1.0, Vec3::splat(0.0));
+    let mut size_projectile_3 = bevy_hanabi::Gradient::new();
+    size_projectile_3.add_key(0.0, Vec3::splat(0.5));
+    size_projectile_3.add_key(0.1, Vec3::splat(2.5));
+    size_projectile_3.add_key(0.4, Vec3::splat(1.5));
+    size_projectile_3.add_key(1.0, Vec3::splat(0.0));
     
     let mut module = Module::default();
     let accel = module.lit(Vec3::new(0., 1.5, 0.));
@@ -965,7 +1036,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_size = SetAttributeModifier::new(Attribute::SIZE, module.lit(1.0));
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     
-    let muzzle_effect_3_base = effects.add(
+    let projectile_effect_3_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(800.0.into()), module) // Extremely high particle count
             .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Blend) 
@@ -975,50 +1046,67 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             .init(init_size)
             .init(init_color)
             .render(ColorOverLifetimeModifier {
-                gradient: gradient_muzzle_3,
+                gradient: gradient_projectile_3,
                 ..Default::default()
             })
             .render(SizeOverLifetimeModifier {
-                gradient: size_muzzle_3,
+                gradient: size_projectile_3,
                 screen_space_size: false,
                 ..Default::default()
             })
             .update(update_accel)
     );
-    let muzzle_effect_3 = commands.spawn((
-        Name::new("Muzzle Effect 3"),
-        ParticleEffect::new(muzzle_effect_3_base),
+    let projectile_effect_3 = commands.spawn((
+        Name::new("projectile Effect 3"),
+        ParticleEffect::new(projectile_effect_3_base),
+        EffectSpawner::default(),
         Transform::from_xyz(0.0, 2.0, -0.5), 
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        MuzzleFlashEffect(3),
+        projectileFlashEffect(3),
     )).id();
 
     commands
         .entity(player)
-        .add_children(&[muzzle_flash, muzzle_effect_2, muzzle_effect_3]);
+        .add_children(&[projectile_flash, projectile_effect_2, projectile_effect_3]);
 }
 
-fn particle_effects_handling(keycode: Res<ButtonInput<KeyCode>>,  mut thruster_spawners: Query<&mut EffectSpawner, Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>
-) {
-    if keycode.just_pressed(KeyCode::Space) {
-        for mut spawner in thruster_spawners.iter_mut() {
-            spawner.active = true;
-            spawner.reset();
+fn muzzle_flash(mut commands: Commands, weapon_transform: Transform) {
+    commands.spawn((
+        PointLight {
+            intensity: 5000.0,
+            range: 5.0,
+            color: Color::WHITE,
+            shadows_enabled: false,
+            ..default()
+        },
+        Transform::from_translation(weapon_transform.translation),
+        DespawnTimer(Timer::from_seconds(0.05, TimerMode::Once)),
+    ));
+    
+}
+
+fn screen_shake(mut camera: Query<&mut Transform, With<Camera>>, mut commands: Commands, time: Res<Time>, mut shake: ResMut<ScreenShake>) {
+    if shake.strength > 0.01 {
+        if let Ok(mut transform) = camera.single_mut() {
+            transform.translation += Vec3::new(
+                rand::rng().random_range(-shake.strength..shake.strength),
+                rand::rng().random_range(-shake.strength..shake.strength),
+                rand::rng().random_range(-shake.strength..shake.strength),
+            );
         }
+        shake.strength *= 0.8_f32.powf(time.delta_secs());
+    } else {
+        shake.strength = 0.0;
     }
 }
 
-
-pub fn setup_lighting(mut query: Query<&mut Visibility, With<Lighting>>, keycode: Res<ButtonInput<KeyCode>>) {
-    if keycode.just_pressed(KeyCode::KeyQ) {
-        for mut visibility in &mut query {
-            *visibility = match *visibility {
-                Visibility::Hidden => Visibility::Visible,
-                _ => Visibility::Hidden,
-            }
+fn hitmarker(mut query: Query<&mut BackgroundColor, With<Hitmarker>>, mut timer: ResMut<HitmarkerTimer>, time: Res<Time>) {
+    if timer.0.tick(time.delta()).just_finished() {
+        for mut color in &mut query {
+            color.0 = Color::srgba(1.0, 1.0, 1.0, 0.0);
         }
     }
 }
@@ -1037,7 +1125,22 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn shooting(mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &MuzzleFlashEffect), Without<Player>>, mut fire_cooldown: Local<f32>, selected_weapon: Res<SelectedWeapon>, window: Single<&Window>, camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mouse_button: Res<ButtonInput<MouseButton>>, mut crosshair: ResMut<FloatingCrosshair>, mut player_query: Query<&mut Transform, With<Player>>, mut gizmos: Gizmos, mut query: Query<&mut BotData>, time: Res<Time>, mut ray_cast: MeshRayCast, parent: Query<&ChildOf>) {
+fn shooting(timer: ResMut<HitmarkerTimer>,
+    q: Query<&mut BackgroundColor, With<Hitmarker>>,
+    mut shake: ResMut<ScreenShake>,
+    (mut crosshair_spread, mut crosshair): (ResMut<CrosshairSpread>, ResMut<FloatingCrosshair>),
+    mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &projectileFlashEffect), Without<Player>>,
+    mut fire_cooldown: Local<f32>, selected_weapon: Res<SelectedWeapon>,
+    window: Single<&Window>,
+    camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    mut player_query: Query<&mut Transform, With<Player>>,
+    mut gizmos: Gizmos,
+    query: Query<&mut BotData>,
+    time: Res<Time>,
+    mut ray_cast: MeshRayCast,
+    parent: Query<&ChildOf>,
+) {
     if *fire_cooldown > 0.0 {
         *fire_cooldown -= time.delta_secs();
     }
@@ -1074,6 +1177,12 @@ fn shooting(mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &Mu
         3 => 2.0,
         _ => 1.0,
     };
+    let shake_strength = match current_weapon {
+        1 => 0.2,
+        2 => 0.5,
+        3 => 1.0,
+        _ => 0.2,
+    };
     let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
     let (inner_camera, camera_transform) = *camera;
     let Ok(camera_ray) = inner_camera.viewport_to_world(camera_transform, in_screen_pos) else { return; };
@@ -1082,19 +1191,20 @@ fn shooting(mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &Mu
     } else {
         camera_ray.origin + *camera_ray.direction * max_range
     };
-    let crosshair_pos = Vec3::new(crosshair.x, 0.0, crosshair.y);
     crosshair.y -= 200.0;
     let forward = -player_transform.forward();
     let ray_pos = player_transform.translation + Vec3::new(0.0, 0.75, 0.0) + *forward * 2.25;
     let dir = Dir3::new(target - ray_pos).unwrap_or(camera_ray.direction);
-    ray_handling(ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
-    for (mut spawner, mut transform, muzzle) in shooting_effects.iter_mut() {
-        if muzzle.0 == current_weapon {
+    ray_handling(timer, q, ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
+    for (mut spawner, mut transform, projectile) in shooting_effects.iter_mut() {
+        if projectile.0 == current_weapon {
             transform.scale = Vec3::splat(flash_scale);
             spawner.active = true;
             spawner.reset();
         }
     }
+    crosshair_spread.spread += 20.0 * flash_scale;
+    shake.strength = shake_strength;
 }
 
 fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With<Player>>) {
@@ -1120,43 +1230,58 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(Text3dPlugin{
+            default_atlas_dimension: (1024, 1024),
+            load_system_fonts: true,
+            ..Default::default()
+        })
+        .insert_resource(LoadFonts {
+            font_paths: vec!["assets/Font.ttf".to_owned()],
+            ..Default::default()
+        })
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
         .add_plugins(UiMaterialPlugin::<WeaponSelectorUI>::default())
         .add_plugins(HanabiPlugin)
         .init_asset::<WeaponData>()
-        .init_asset::<MuzzleFlash>()
+        .init_asset::<projectileFlash>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .init_resource::<SelectedWeapon>()
         .init_resource::<BotConfig>()
+        .insert_resource(CrosshairSpread { spread: 0.0 })
+        .insert_resource(ScreenShake { strength: 0.0 })
+        .insert_resource(Hitmarker)
+        .insert_resource(HitmarkerTimer(Timer::from_seconds(0.1, TimerMode::Once)))
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
         .add_systems(Startup, (spawn_player, setup))
         .add_systems(Startup, (bot_spawn, jump_indicator, health_bar, weapon_selector_setup))
         .add_systems(
             Update,
-            (
+            (   
                 player_movement,
                 setup_scene_once_loaded,
                 movement_animations,
                 camera_positioning,
-                setup_lighting,
                 bot_handling,
                 cursor_handling,
                 mesh_load_check,
                 shooting,
-                botdead,
                 jump_indicator_handling,
                 health_bar_handling,
                 despawn_ray,
                 targeting_disruptor,
-                particle_effects,
-                particle_effects_handling,
                 player_death,
-                weapon_selector,
-                weapon_selector_handling,
             ),
         )
+        .add_systems(Update, (
+                botdead,
+                particle_effects,
+                crosshair_spread,
+                weapon_selector_handling,
+                crosshair_spread,
+                hitmarker,
+        ))
         .run();
 }
