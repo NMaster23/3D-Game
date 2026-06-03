@@ -1,4 +1,4 @@
-use bevy::{color::palettes::css::{self, WHITE_SMOKE}, core_pipeline::tonemapping::Tonemapping, input::mouse::{AccumulatedMouseMotion, MouseButton::Left}, math::VectorSpace, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, SystemCursorIcon::Pointer, WindowResolution}};
+use bevy::{color::palettes::css::{self, WHITE_SMOKE}, core_pipeline::tonemapping::Tonemapping, input::mouse::{AccumulatedMouseMotion, MouseButton::Left}, math::VectorSpace, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, state::{self, commands}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, SystemCursorIcon::Pointer, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -115,6 +115,12 @@ struct SelectedWeapon {
 #[derive(Component)]
 struct MainMenuUi;
 
+#[derive(Component)]
+struct StartButton;
+
+#[derive(Component)]
+struct SettingsButton;
+
 #[derive(Resource)]
 struct BotConfig {
     pub accuracy_range: std::ops::Range<i32>,
@@ -182,12 +188,18 @@ struct ImpactEffects {
     arc_effect: Handle<EffectAsset>,
 }
 
-#[derive(States, Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
+#[derive(States, Default, Clone, Eq, PartialEq, Debug, Hash)]
 pub enum AppState {
     #[default]
     MainMenu,
     InGame,
 }
+
+#[derive(Component)]
+struct Settings1;
+
+#[derive(Component)]
+struct Settings2;
 
 impl UiMaterial for JumpIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
@@ -1405,26 +1417,51 @@ fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
         Node::default(),
         NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
         MainMenuUi,
-        children![(Button, children![Text::new("Start Game")])],
+        children![
+            (Button, StartButton, Node::default(), children![Text::new("Start Game")]),
+            (Button, SettingsButton, Node::default(), children![Text::new("Settings")]),
+        ],
     ));
 }
 
-/*fn main_menu_interaction(
-    mut interaction_query: Query<&Interaction, (Changed<Interaction>, With<Button>)>,
+fn main_menu(
     mut state: ResMut<NextState<AppState>>,
+    q_start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
+    q_settings: Query<&Interaction, (Changed<Interaction>, With<SettingsButton>)>,
+    q_main_menu: Query<Entity, With<MainMenuUi>>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
 ) {
-    for interaction in &mut interaction_query {
+    for interaction in q_start.iter() {
         if *interaction == Interaction::Pressed {
             state.set(AppState::InGame);
         }
     }
+    
+    for interaction in q_settings.iter() {
+        if *interaction == Interaction::Pressed {
+            println!("Settings button clicked!");
+            for entity in q_main_menu.iter() {
+                commands.entity(entity).despawn();
+            }
+            commands.spawn((
+                Node::default(),
+                NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
+                MainMenuUi,
+                children![
+                    (Button, Settings1, Node::default(), children![Text::new("Button1")]),
+                    (Button, Settings2, Node::default(), children![Text::new("Button2")]),
+                ],
+            ));
+        }
+    }
 }
 
-fn despawn_main_menu(mut commands: Commands, query: Query<Entity, With<MainMenuUi>>) {
-    for entity in &query {
-        commands.entity(entity).despawn_children();
+fn main_menu_handling(mut commands: Commands, query: Query<Entity, With<MainMenuUi>>) {
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
     }
-}*/
+}
 
 fn main() {
     App::new()
@@ -1447,21 +1484,21 @@ fn main() {
         .add_plugins(FlairPlugin)
         .init_asset::<WeaponData>()
         .init_asset::<projectileFlash>()
+        .init_state::<AppState>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .init_resource::<SelectedWeapon>()
         .init_resource::<BotConfig>()
-        .init_state::<AppState>()
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
         .insert_resource(Hitmarker)
         .insert_resource(HitmarkerTimer(Timer::from_seconds(0.1, TimerMode::Once)))
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
-        .add_systems(Startup, setup_impact_effects)
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
-        .add_systems(Update, main_menu_interaction.run_if(in_state(AppState::MainMenu)))
-        .add_systems(OnExit(AppState::MainMenu), despawn_main_menu)
+        .add_systems(Update, main_menu.run_if(in_state(AppState::MainMenu)))
+        .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
+        .add_systems(Startup, setup_impact_effects)
         .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup))
         .add_systems(
             Update,

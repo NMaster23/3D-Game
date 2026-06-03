@@ -16,13 +16,39 @@ button {
   justify-content: center;
   width: 150px;
   height: 65px;
-  background-color: rgb(15%, 15%, 15%);
+  background-color: rgb(0, 255, 106);
   border-radius: 10px;
   transition: background-color 0.5s;
 
   &:hover {
     color: #ddd;
-    background-color: rgb(30%, 30%, 25%);
+    background-color: rgb(0, 102, 170);
+  }
+
+  &:active {
+    color: #ddd;
+    background-color: rgb(35%, 65%, 35%);
+  }
+
+  text {
+    /* Color transitions need to happen in the text element */
+    transition: color 0.5s;
+  }
+}
+
+button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 150px;
+  height: 65px;
+  background-color: rgb(2, 20, 58);
+  border-radius: 10px;
+  transition: background-color 0.5s;
+
+  &:hover {
+    color: #ddd;
+    background-color: rgb(0, 102, 170);
   }
 
   &:active {
