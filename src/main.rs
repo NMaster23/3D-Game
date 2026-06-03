@@ -112,6 +112,9 @@ struct SelectedWeapon {
     pub id: u32,
 }
 
+#[derive(Component)]
+struct MainMenuUi;
+
 #[derive(Resource)]
 struct BotConfig {
     pub accuracy_range: std::ops::Range<i32>,
@@ -1396,17 +1399,30 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
     }
 }
 
-fn user_interface(state: Res<State<AppState>>, asset_server: Res<AssetServer>, mut commands: Commands) {
-    match *state.get() {
-        AppState::MainMenu => {
-            commands.spawn((
-                Node::default(),
-                NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
-            ));
+fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
+    commands.spawn((Camera2d, MainMenuUi));
+    commands.spawn((
+        Node::default(),
+        NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
+        MainMenuUi,
+        children![(Button, children![Text::new("Start Game")])],
+    ));
+}
+
+fn main_menu_interaction(
+    mut interaction_query: Query<&Interaction, (Changed<Interaction>, With<Button>)>,
+    mut state: ResMut<NextState<AppState>>,
+) {
+    for interaction in &mut interaction_query {
+        if *interaction == Interaction::Pressed {
+            state.set(AppState::InGame);
         }
-        AppState::InGame => {
-            // Display in-game UI
-        }
+    }
+}
+
+fn despawn_main_menu(mut commands: Commands, query: Query<Entity, With<MainMenuUi>>) {
+    for entity in &query {
+        commands.entity(entity).despawn_recursive();
     }
 }
 
@@ -1442,8 +1458,11 @@ fn main() {
         .insert_resource(HitmarkerTimer(Timer::from_seconds(0.1, TimerMode::Once)))
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
-        .add_systems(Startup, (spawn_player, setup))
-        .add_systems(Startup, (bot_spawn, jump_indicator, health_bar, weapon_selector_setup, setup_impact_effects))
+        .add_systems(Startup, setup_impact_effects)
+        .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
+        .add_systems(Update, main_menu_interaction.run_if(in_state(AppState::MainMenu)))
+        .add_systems(OnExit(AppState::MainMenu), despawn_main_menu)
+        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup))
         .add_systems(
             Update,
             (   
@@ -1462,7 +1481,7 @@ fn main() {
                 player_death,
                 botdead,
                 particle_effects,
-            ),
+            ).run_if(in_state(AppState::InGame)),
         )
         .add_systems(
             Update,
@@ -1471,7 +1490,7 @@ fn main() {
                 crosshair_spread,
                 hitmarker,
                 screen_shake.after(camera_positioning),
-            ),
+            ).run_if(in_state(AppState::InGame)),
         )
         .run();
 }
