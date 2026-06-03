@@ -4,8 +4,8 @@ use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 use std::collections::HashMap;
-use bevy_rich_text3d::*;
 use bevy_hanabi::prelude::*;
+use bevy_flair::prelude::*;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -177,6 +177,13 @@ struct CrosshairSpread {
 struct ImpactEffects {
     spark_effect: Handle<EffectAsset>,
     arc_effect: Handle<EffectAsset>,
+}
+
+#[derive(States, Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
+pub enum AppState {
+    #[default]
+    MainMenu,
+    InGame,
 }
 
 impl UiMaterial for JumpIndicator {
@@ -385,18 +392,7 @@ fn botdead(player_data: Query<&mut Transform, With<Player>>, mut commands: Comma
             living_bots.0 -= 1;
         }
         if living_bots.0 == 0 {
-            commands.spawn((
-                Text3d::new("Hello, World!"),
-                Mesh3d::default(),
-                MeshMaterial3d(materials.add(
-                    StandardMaterial {
-                        base_color_texture: Some(TextAtlas::DEFAULT_IMAGE.clone()),
-                        alpha_mode: bevy::prelude::AlphaMode::Blend,
-                        ..Default::default()
-                    }
-                )),
-                Transform::from_xyz(player_transform.translation.x, player_transform.translation.y, player_transform.translation.z).with_scale(Vec3::splat(10.0)),
-            ));
+            println!("All bots defeated! You win!");
         }
     }
 }
@@ -513,7 +509,7 @@ fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResM
     }
 }
 
-fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>) {
+fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, mut state: ResMut<NextState<AppState>>) {
     if mouse.just_pressed(MouseButton::Left) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
@@ -521,6 +517,7 @@ fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode
     if keycode.just_pressed(KeyCode::Escape) {
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
+        state.set(AppState::MainMenu);
     }
 }
 
@@ -980,8 +977,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     );
     let mut writer_flame = ExprWriter::new();
     let mut color_flame = bevy_hanabi::Gradient::new();
-    color_flame.add_key(0.0, Vec4::new(1.0, 1.0, 1.0, 1.0)); // White hot center
-    color_flame.add_key(0.5, Vec4::new(0.0, 0.8, 1.0, 1.0)); // Cyan plasma
+    color_flame.add_key(0.0, Vec4::new(1.0, 1.0, 1.0, 1.0));
+    color_flame.add_key(0.5, Vec4::new(0.0, 0.8, 1.0, 1.0));
     color_flame.add_key(1.0, Vec4::new(0.0, 0.2, 0.8, 0.0));
 
     let mut size_flame = bevy_hanabi::Gradient::new();
@@ -1275,6 +1272,14 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
+fn state_checker(current_state: Res<State<AppState>>) {
+    if *current_state.get() == AppState::InGame {
+        println!("The player is currently in the game!");
+    } else if *current_state.get() == AppState::MainMenu {
+        println!("The player is waiting in the menu.");
+    }
+}
+
 fn shooting(
     (impact_effects, timer, time, selected_weapon, mouse_button): (
         Res<ImpactEffects>,
@@ -1391,6 +1396,20 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
     }
 }
 
+fn user_interface(state: Res<State<AppState>>, asset_server: Res<AssetServer>, mut commands: Commands) {
+    match *state.get() {
+        AppState::MainMenu => {
+            commands.spawn((
+                Node::default(),
+                NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
+            ));
+        }
+        AppState::InGame => {
+            // Display in-game UI
+        }
+    }
+}
+
 fn main() {
     App::new()
         .add_plugins(EmbeddedAssetPlugin {
@@ -1405,25 +1424,18 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins(Text3dPlugin{
-            default_atlas_dimension: (1024, 1024),
-            load_system_fonts: true,
-            ..Default::default()
-        })
-        .insert_resource(LoadFonts {
-            font_paths: vec!["assets/Font.ttf".to_owned()],
-            ..Default::default()
-        })
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
         .add_plugins(UiMaterialPlugin::<WeaponSelectorUI>::default())
         .add_plugins(HanabiPlugin)
+        .add_plugins(FlairPlugin)
         .init_asset::<WeaponData>()
         .init_asset::<projectileFlash>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .init_resource::<SelectedWeapon>()
         .init_resource::<BotConfig>()
+        .init_state::<AppState>()
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
         .insert_resource(Hitmarker)
