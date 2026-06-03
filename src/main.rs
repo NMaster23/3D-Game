@@ -1409,7 +1409,7 @@ fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
     ));
 }
 
-fn main_menu_interaction(
+/*fn main_menu_interaction(
     mut interaction_query: Query<&Interaction, (Changed<Interaction>, With<Button>)>,
     mut state: ResMut<NextState<AppState>>,
 ) {
@@ -1422,9 +1422,9 @@ fn main_menu_interaction(
 
 fn despawn_main_menu(mut commands: Commands, query: Query<Entity, With<MainMenuUi>>) {
     for entity in &query {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn_children();
     }
-}
+}*/
 
 fn main() {
     App::new()
