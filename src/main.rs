@@ -201,6 +201,15 @@ struct Settings1;
 #[derive(Component)]
 struct Settings2;
 
+#[derive(Resource)]
+struct CycleMenu {
+    pub options: Vec<String>,
+    pub index: usize,
+}
+
+#[derive(Component)]
+struct CycleTextTarget;
+
 impl UiMaterial for JumpIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/jump_indicator.wgsl".into()
@@ -1287,14 +1296,6 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
     }
 }
 
-fn state_checker(current_state: Res<State<AppState>>) {
-    if *current_state.get() == AppState::InGame {
-        println!("The player is currently in the game!");
-    } else if *current_state.get() == AppState::MainMenu {
-        println!("The player is waiting in the menu.");
-    }
-}
-
 fn shooting(
     (impact_effects, timer, time, selected_weapon, mouse_button): (
         Res<ImpactEffects>,
@@ -1412,7 +1413,7 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
 }
 
 fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
-    commands.spawn((Camera2d, MainMenuUi));
+    commands.spawn((Camera2d));
     commands.spawn((
         Node::default(),
         NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
@@ -1424,6 +1425,26 @@ fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
     ));
 }
 
+fn cycle_menu(keycode: Res<ButtonInput<KeyCode>>, mut menu: ResMut<CycleMenu>, mut query: Query<&mut Text, With<CycleTextTarget>>) {
+    let mut changed = false;
+    if keycode.just_pressed(KeyCode::ArrowRight) {
+        menu.index = (menu.index + 1) % menu.options.len();
+        changed = true;
+    } else if keycode.just_pressed(KeyCode::ArrowLeft) {
+        if menu.index == 0 {
+            menu.index = menu.options.len() - 1;
+        } else {
+            menu.index -= 1;
+        }
+        changed = true;
+    }
+    if changed {
+        for mut text in &mut query {
+            text.0 = menu.options[menu.index].to_string();
+        }
+    }
+}
+
 fn main_menu(
     mut state: ResMut<NextState<AppState>>,
     q_start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
@@ -1431,6 +1452,7 @@ fn main_menu(
     q_main_menu: Query<Entity, With<MainMenuUi>>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    menu: Res<CycleMenu>,
 ) {
     for interaction in q_start.iter() {
         if *interaction == Interaction::Pressed {
@@ -1449,8 +1471,11 @@ fn main_menu(
                 NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
                 MainMenuUi,
                 children![
-                    (Button, Settings1, Node::default(), children![Text::new("Button1")]),
-                    (Button, Settings2, Node::default(), children![Text::new("Button2")]),
+                    (
+                        Text::new(menu.options[menu.index].clone()), 
+                        CycleTextTarget
+                    ),
+                    (Text::new("Press Left/Right to cycle")), 
                 ],
             ));
         }
@@ -1493,10 +1518,14 @@ fn main() {
         .insert_resource(ScreenShake { strength: 0.0 })
         .insert_resource(Hitmarker)
         .insert_resource(HitmarkerTimer(Timer::from_seconds(0.1, TimerMode::Once)))
+        .insert_resource(CycleMenu {
+            options: vec!["Low".to_string(), "Medium".to_string(), "High".to_string()],
+            index: 0,
+        })
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
-        .add_systems(Update, main_menu.run_if(in_state(AppState::MainMenu)))
+        .add_systems(Update, (main_menu, cycle_menu).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
         .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup))
