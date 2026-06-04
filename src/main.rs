@@ -1,4 +1,4 @@
-use bevy::{color::palettes::css::{self, WHITE_SMOKE}, core_pipeline::tonemapping::Tonemapping, input::mouse::{AccumulatedMouseMotion, MouseButton::Left}, math::VectorSpace, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, state::{self, commands}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, SystemCursorIcon::Pointer, WindowResolution}};
+use bevy::{color::palettes::css::{self, WHITE_SMOKE}, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, math::VectorSpace, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -121,6 +121,9 @@ struct StartButton;
 #[derive(Component)]
 struct SettingsButton;
 
+#[derive(Component)]
+struct ApplySettingsButton;
+
 #[derive(Resource)]
 struct BotConfig {
     pub accuracy_range: std::ops::Range<i32>,
@@ -209,6 +212,16 @@ struct CycleMenu {
 
 #[derive(Component)]
 struct CycleTextTarget;
+
+#[derive(Resource)]
+struct PlayerModel {
+    model_name: String
+}
+
+#[derive(Resource)]
+struct TerrainModel {
+    model_name: String
+}
 
 impl UiMaterial for JumpIndicator {
     fn fragment_shader() -> bevy::shader::ShaderRef {
@@ -545,16 +558,16 @@ fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode
     }
 }
 
-fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut graphs: ResMut<Assets<AnimationGraph>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut graphs: ResMut<Assets<AnimationGraph>>, player_model: Res<PlayerModel>) {
     let (graph, node_indices) = AnimationGraph::from_clips([
-        asset_server.load(GltfAssetLabel::Animation(0).from_asset("Player/Player.glb")),
+        asset_server.load(GltfAssetLabel::Animation(0).from_asset(player_model.model_name.clone())),
     ]);
     let graph_handle = graphs.add(graph);
     commands.insert_resource(Animations {
         animations: node_indices,
         graph_handle,
     });
-    let player_model = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Player/Player.glb"));
+    let player_model = asset_server.load(GltfAssetLabel::Scene(0).from_asset(player_model.model_name.clone()));
     commands.spawn((
         GlobalTransform::default(),
         Player,
@@ -724,10 +737,6 @@ fn targeting_disruptor(keycode: Res<ButtonInput<KeyCode>>, mut bot_config: ResMu
     }
 }
 
-fn collision_effects(commands: Commands, hit_pos: Local<Vec3>) {
-    
-}
-
 fn setup_scene_once_loaded(
     mut commands: Commands,
     animations: Res<Animations>,
@@ -888,7 +897,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
-    mut terrain_gen: ResMut<TerrainGen>
+    mut terrain_gen: ResMut<TerrainGen>,
 ) {
     let floor_id = commands.spawn((
         Collider::cuboid(100.0, 1.0, 100.0),
@@ -1475,9 +1484,35 @@ fn main_menu(
                         Text::new(menu.options[menu.index].clone()), 
                         CycleTextTarget
                     ),
-                    (Text::new("Press Left/Right to cycle")), 
+                    (Button, ApplySettingsButton, Node::default(), children![Text::new("Apply")]),
                 ],
             ));
+        }
+    }
+}
+
+fn settings_apply(query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, mut player_model: ResMut<PlayerModel>, mut terrain_model: ResMut<TerrainModel>) {
+    for interaction in query.iter() {
+        if *interaction == Interaction::Pressed {
+            println!("Settings applied!");
+            match menu.index {
+                0 => {
+                    player_model.model_name = "Player/Player.glb".to_string();
+                    terrain_model.model_name = "Environment/Terrain.glb".to_string();
+                }
+                1 => {
+                    player_model.model_name = "Player/Player_Highpoly.glb".to_string();
+                    terrain_model.model_name = "Environment/Terrain_Medpoly.glb".to_string();
+                }
+                2 => {
+                    player_model.model_name = "Player/Player_Highpoly.glb".to_string();
+                    terrain_model.model_name = "Environment/Terrain_Highpoly.glb".to_string();
+                }
+                _ => {
+                    player_model.model_name = "Player/Player.glb".to_string();
+                    terrain_model.model_name = "Environment/Terrain.glb".to_string();
+                }
+            }
         }
     }
 }
@@ -1519,13 +1554,13 @@ fn main() {
         .insert_resource(Hitmarker)
         .insert_resource(HitmarkerTimer(Timer::from_seconds(0.1, TimerMode::Once)))
         .insert_resource(CycleMenu {
-            options: vec!["Low".to_string(), "Medium".to_string(), "High".to_string()],
+            options: vec!["< Low Preset >".to_string(), "< Medium Preset >".to_string(), "< High Preset >".to_string()],
             index: 0,
         })
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
-        .add_systems(Update, (main_menu, cycle_menu).run_if(in_state(AppState::MainMenu)))
+        .add_systems(Update, (main_menu, cycle_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
         .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup))
