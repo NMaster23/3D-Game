@@ -1,4 +1,4 @@
-use bevy::{color::palettes::css::{self, WHITE_SMOKE}, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, math::VectorSpace, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{color::palettes::css::{self}, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -30,7 +30,7 @@ pub struct HealthBarUI {
 }
 
 #[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
-pub struct projectileFlash {
+pub struct ProjectileFlash {
     #[uniform(0)]
     pub power: f32,
     #[uniform(0)]
@@ -141,15 +141,7 @@ struct Animations {
 }
 
 #[derive(Component)]
-struct BulletMagazine;
-
-#[derive(Component)]
-struct projectileFlashEffect(pub u32);
-
-#[derive(Resource, Default)]
-struct PlayerWeapon {
-    pub weapons: HashMap<u32, Handle<WeaponData>>,
-}
+struct ProjectileFlashEffect(pub u32);
 
 #[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
 pub struct WeaponSelectorUI {
@@ -197,12 +189,6 @@ pub enum AppState {
     MainMenu,
     InGame,
 }
-
-#[derive(Component)]
-struct Settings1;
-
-#[derive(Component)]
-struct Settings2;
 
 #[derive(Resource)]
 struct CycleMenu {
@@ -313,7 +299,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
                 ..Default::default()
             })
     );
-    let mut writer_arc = ExprWriter::new();
+    let writer_arc = ExprWriter::new();
     let mut gradient_arc = bevy_hanabi::Gradient::new();
     gradient_arc.add_key(0.0, Vec4::new(1.0, 0.9, 0.6, 1.0));
     gradient_arc.add_key(0.3, Vec4::new(1.0, 0.4, 0.1, 0.8));
@@ -365,7 +351,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     });
 }
 
-fn ray_handling(impact_effects: Res<ImpactEffects>, mut commands: Commands, mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, mut ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
+fn ray_handling(impact_effects: Res<ImpactEffects>, mut commands: Commands, mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
     let mut ray = Ray3d::new(ray_pos, ray_dir);
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
@@ -417,7 +403,7 @@ fn ray_handling(impact_effects: Res<ImpactEffects>, mut commands: Commands, mut 
     gizmos.linestrip_gradient(intersections);
 }
 
-fn botdead(player_data: Query<&mut Transform, With<Player>>, mut commands: Commands, mut query: Query<(Entity, &BotData, &mut Transform), (Changed<BotData>, Without<Player>)>, mut living_bots: ResMut<LivingBots>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn botdead(player_data: Query<&mut Transform, With<Player>>, mut commands: Commands, mut query: Query<(Entity, &BotData, &mut Transform), (Changed<BotData>, Without<Player>)>, mut living_bots: ResMut<LivingBots>, materials: ResMut<Assets<StandardMaterial>>) {
     let Ok(player_transform) = player_data.single() else {
         return;
     };
@@ -632,7 +618,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
 fn bot_handling(
     time: Res<Time>,
     mut commands: Commands,
-    mut materials: ResMut<Assets<projectileFlash>>,
+    mut materials: ResMut<Assets<ProjectileFlash>>,
     mut ray_cast: MeshRayCast,
     mut gizmos: Gizmos,
     mut q: Query<(Entity, &mut Transform, &mut CharacterController, &mut BotData, &mut LinearVelocity), (With<Bots>, Without<Player>)>,
@@ -701,7 +687,7 @@ fn bot_handling(
                             let damage = (15.0 * (1.0 - total_length / max_range)).max(1.0) as i32;
                             pd.health -= damage;
                             println!("Player hit! Health: {}, Distance: {:.2}", pd.health, hit_data.distance);
-                            let flash = materials.add(projectileFlash {
+                            let flash = materials.add(ProjectileFlash {
                                 power: 1.0,
                                 color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
                             });
@@ -1140,7 +1126,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        projectileFlashEffect(1),
+        ProjectileFlashEffect(1),
     )).id();
     let mut gradient_projectile_2 = bevy_hanabi::Gradient::new();
     gradient_projectile_2.add_key(0.0, Vec4::new(0.8, 1.0, 1.0, 1.0));
@@ -1198,7 +1184,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        projectileFlashEffect(2),
+        ProjectileFlashEffect(2),
     )).id();
 
     let mut gradient_projectile_3 = bevy_hanabi::Gradient::new();
@@ -1260,7 +1246,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         Visibility::default(),
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        projectileFlashEffect(3),
+        ProjectileFlashEffect(3),
     )).id();
 
     commands
@@ -1320,7 +1306,7 @@ fn shooting(
         Single<&Window>,
     ),
     mut commands: Commands,
-    mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &projectileFlashEffect), Without<Player>>,
+    mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &ProjectileFlashEffect), Without<Player>>,
     mut fire_cooldown: Local<f32>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut player_query: Query<&mut Transform, With<Player>>,
@@ -1422,7 +1408,7 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
 }
 
 fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
-    commands.spawn((Camera2d));
+    commands.spawn(Camera2d);
     commands.spawn((
         Node::default(),
         NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
@@ -1543,7 +1529,7 @@ fn main() {
         .add_plugins(HanabiPlugin)
         .add_plugins(FlairPlugin)
         .init_asset::<WeaponData>()
-        .init_asset::<projectileFlash>()
+        .init_asset::<ProjectileFlash>()
         .init_state::<AppState>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
@@ -1556,6 +1542,12 @@ fn main() {
         .insert_resource(CycleMenu {
             options: vec!["< Low Preset >".to_string(), "< Medium Preset >".to_string(), "< High Preset >".to_string()],
             index: 0,
+        })
+        .insert_resource(PlayerModel {
+            model_name: "Player/Player.glb".to_string()
+        })
+        .insert_resource(TerrainModel {
+            model_name: "Environment/Terrain.glb".to_string()
         })
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
