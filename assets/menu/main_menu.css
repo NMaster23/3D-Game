@@ -1,63 +1,88 @@
+@keyframes borders-animation {
+    0%, 50%, 100% {
+        margin-top: 0;
+        width: 250px;
+        height: 60px;
+    }
+    25% {
+        margin-top: -5px;
+        width: 270px;
+        height: 70px;
+    }
+}
+
 :root {
-  display: flex;
-  width: 100%;
-  height: 100%;
-  align-items: center;
-  justify-content: center;
+    width: 100%;
+    height: 100%;
+    background-color: #1f2730;
+    --floating-borders-top: 100px;
+    --floating-borders-spacing: 90px;
+}
 
-  /* font-size and color are inherited */
-  font-size: 35px;
-  color: rgb(30% 30% 30%);
+:root, #game_menu {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#menu_title {
+    font-size: 38px;
+    color: #d68a4c;
+}
+
+#game_menu {
+    width: auto;
+    height: auto;
+    padding: 25px 90px 40px;
+    position: relative;
+    background-color: rgb(39, 58, 66);
+
+    flex-direction: column;
+
+    border-radius: 2px;
+    -bevy-image-mode: sliced(20.0px);
 }
 
 button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 150px;
-  height: 65px;
-  background-color: rgb(0, 255, 106);
-  border-radius: 10px;
-  transition: background-color 0.5s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 
-  &:hover {
-    color: #ddd;
-    background-color: rgb(0, 102, 170);
-  }
+    margin-top: 30px;
+    background-color: transparent;
 
-  &:active {
-    color: #ddd;
-    background-color: rgb(35%, 65%, 35%);
-  }
-
-  text {
-    /* Color transitions need to happen in the text element */
-    transition: color 0.5s;
-  }
+    font-size: 20px;
+    color: rgb(20, 20, 21);
+    &:focus {
+        color: #E6E6E6;
+    }
+    text {
+        transition: color 0.6s;
+    }
 }
 
-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 150px;
-  height: 65px;
-  background-color: rgb(2, 20, 58);
-  border-radius: 10px;
-  transition: background-color 0.5s;
+button, #floating_borders {
+    width: 250px;
+    height: 60px;
+}
 
-  &:hover {
-    color: #ddd;
-    background-color: rgb(0, 102, 170);
-  }
+#floating_borders {
+    display: flex;
+    position: absolute;
+    top: auto;
+    transition: top 0.6s;
+    margin-top: 0;
+    -bevy-image-mode: sliced(20.0px);
+}
 
-  &:active {
-    color: #ddd;
-    background-color: rgb(35%, 65%, 35%);
-  }
+button:nth-child(2):focus ~ #floating_borders { 
+    top: calc(#E6E6E6 + var(--floating-borders-spacing) * 0);
+}
 
-  text {
-    /* Color transitions need to happen in the text element */
-    transition: color 0.5s;
-  }
+button:nth-child(3):focus ~ #floating_borders {
+    top: calc(#E6E6E6 + var(--floating-borders-spacing) * 1);
+}
+
+button:hover ~ #floating_borders {
+    animation: 2.0s linear 2 borders-animation;
 }

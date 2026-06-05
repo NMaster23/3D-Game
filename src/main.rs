@@ -1,4 +1,4 @@
-use bevy::{color::palettes::css::{self}, core_pipeline::tonemapping::Tonemapping, input::mouse::AccumulatedMouseMotion, post_process::bloom::Bloom, prelude::*, render::{render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{render::render_resource::{TextureViewDescriptor, TextureViewDimension}, anti_alias::taa::TemporalAntiAliasing, color::palettes::css::{self}, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{camera::TemporalJitter, render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -282,7 +282,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     );
     let module = writer_spark.finish();
     let spark_effect = effects.add(
-        EffectAsset::new(32, SpawnerSettings::once(32.0.into()), module)
+        EffectAsset::new(1000, SpawnerSettings::once(1000.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
@@ -327,7 +327,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     );
     let module = writer_arc.finish();
     let arc_effect = effects.add(
-        EffectAsset::new(32, SpawnerSettings::once(32.0.into()), module)
+        EffectAsset::new(2000, SpawnerSettings::once(2000.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos_arc)
@@ -919,24 +919,48 @@ fn setup(
             Crosshair,
         ));
     });
+    let sky = asset_server.load_with_settings(
+        "Environment/Sky.ktx2",
+        |settings: &mut bevy::render::texture::ImageLoaderSettings| {
+            settings.is_srgb = false;
+            settings.texture_view_descriptor = Some(TextureViewDescriptor {
+                dimension: Some(TextureViewDimension::Cube),
+                ..default()
+            });
+        }
+    );
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
         Bloom::NATURAL,
         Hdr,
-        Tonemapping::None,
-    ));
+        Msaa::Off,
+        ScreenSpaceAmbientOcclusion { quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra, constant_object_thickness: 0.5 },
+        TemporalAntiAliasing::default(),
+        TemporalJitter::default(),
+        Tonemapping::TonyMcMapface,
+        bevy::pbr::ScreenSpaceReflections::default(),
+        DepthPrepass,
+        NormalPrepass,
+        MotionVectorPrepass,
+    ))
+    .insert(VolumetricFog {
+        ambient_color: Color::srgb(0.1, 0.1, 0.12),
+        ambient_intensity: 0.1,
+        step_count: 64,
+        ..default()
+    })
+    .insert(Skybox {
+        image: sky.clone(),
+        brightness: 1000.0,
+        ..Default::default()
+    });
     commands.spawn((
         DirectionalLight {
             illuminance: 5000.0,
             shadows_enabled: true,
             ..default()
         },
-    ));
-    let sky = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment/Sky.glb"));
-    commands.spawn((
-        SceneRoot(sky),
-        Transform::from_xyz(0.0, -10.0, 0.0).with_scale(Vec3::splat(2000.0)),
     ));
     commands.spawn(Node {
         width: Val::Percent(100.0),
@@ -954,12 +978,12 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     };
     let mut writer_smoke = ExprWriter::new();
     let mut color_smoke = bevy_hanabi::Gradient::new();
-    color_smoke.add_key(0.0, Vec4::new(0.6, 0.8, 1.0, 0.8)); // Hot steam initially
-    color_smoke.add_key(0.2, Vec4::new(0.3, 0.3, 0.35, 0.6)); // Cools to dense grey
-    color_smoke.add_key(1.0, Vec4::new(0.1, 0.1, 0.1, 0.0));  // Fades out entirely
+    color_smoke.add_key(0.0, Vec4::new(0.6, 0.8, 1.0, 0.8));
+    color_smoke.add_key(0.2, Vec4::new(0.3, 0.3, 0.35, 0.6));
+    color_smoke.add_key(1.0, Vec4::new(0.1, 0.1, 0.1, 0.0));
     let mut size_smoke = bevy_hanabi::Gradient::new();
-    size_smoke.add_key(0.0, Vec3::splat(0.2)); // Starts tight
-    size_smoke.add_key(1.0, Vec3::splat(1.5)); // Expands massively to simulate volume
+    size_smoke.add_key(0.0, Vec3::splat(0.2));
+    size_smoke.add_key(1.0, Vec3::splat(1.5));
     let smoke_pos_center = writer_smoke.lit(Vec3::ZERO).expr();
     let smoke_pos_radius = writer_smoke.lit(0.05).expr();
     let smoke_vel_center = writer_smoke.lit(Vec3::new(0.0, -1.0, 0.0)).expr();
@@ -1375,7 +1399,7 @@ fn shooting(
     crosshair.y -= 200.0;
     let forward = -player_transform.forward();
     let ray_pos = player_transform.translation + Vec3::new(0.0, 0.75, 0.0) + *forward * 2.25;
-    
+    let projectile_dir = (target - ray_pos).normalize_or_zero();
     let total_spread = base_spread + (crosshair_spread.spread * 0.2);
     let mut dir_vec = (target - ray_pos).normalize_or_zero();
     if dir_vec == Vec3::ZERO { dir_vec = *camera_ray.direction; }
@@ -1389,6 +1413,7 @@ fn shooting(
     ray_handling(impact_effects, commands, timer, q, ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
     for (mut spawner, mut transform, projectile) in shooting_effects.iter_mut() {
         if projectile.0 == current_weapon {
+            Transform::from_translation(ray_pos).looking_to(projectile_dir, Vec3::Y);
             transform.scale = Vec3::splat(flash_scale);
             spawner.active = true;
             spawner.reset();
@@ -1414,8 +1439,12 @@ fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
         NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
         MainMenuUi,
         children![
-            (Button, StartButton, Node::default(), children![Text::new("Start Game")]),
-            (Button, SettingsButton, Node::default(), children![Text::new("Settings")]),
+            (Node::default(), Name::new("game_menu"), children![
+                (Text::new("Mech Game".to_string()), Name::new("menu_title"), Node::default()),
+                (Button, StartButton, Node::default(), children![(Text::new("Start Game"), Node::default())]),
+                (Button, SettingsButton, Node::default(), children![(Text::new("Settings"), Node::default())]),
+                (Node::default(), Name::new("floating_borders"))
+            ]),
         ],
     ));
 }
@@ -1468,9 +1497,10 @@ fn main_menu(
                 children![
                     (
                         Text::new(menu.options[menu.index].clone()), 
-                        CycleTextTarget
+                        CycleTextTarget,
+                        Node::default()
                     ),
-                    (Button, ApplySettingsButton, Node::default(), children![Text::new("Apply")]),
+                    (Button, ApplySettingsButton, Node::default(), children![(Text::new("Apply"), Node::default())]),
                 ],
             ));
         }
@@ -1503,8 +1533,11 @@ fn settings_apply(query: Query<&Interaction, (Changed<Interaction>, With<ApplySe
     }
 }
 
-fn main_menu_handling(mut commands: Commands, query: Query<Entity, With<MainMenuUi>>) {
+fn main_menu_handling(mut commands: Commands, query: Query<Entity, With<MainMenuUi>>, camera_query: Query<Entity, With<Camera2d>>) {
     for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+    for entity in camera_query.iter() {
         commands.entity(entity).despawn();
     }
 }
