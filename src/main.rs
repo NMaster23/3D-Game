@@ -1,9 +1,9 @@
-use bevy::{render::render_resource::{TextureViewDescriptor, TextureViewDimension}, anti_alias::taa::TemporalAntiAliasing, color::palettes::css::{self}, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{camera::TemporalJitter, render_resource::AsBindGroup, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{anti_alias::taa::TemporalAntiAliasing, color::palettes::css::{self}, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{camera::TemporalJitter, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
-use std::collections::HashMap;
+use std::f32::consts::PI;
 use bevy_hanabi::prelude::*;
 use bevy_flair::prelude::*;
 
@@ -746,8 +746,6 @@ fn movement_animations(
     mut animation_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
     _animations: Res<Animations>,
     _current_animation: Local<usize>,
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
 ) {
     for (mut player, _transitions) in &mut animation_players {
         let Some((&playing_animation_index, _)) = player.playing_animations().next() else {
@@ -769,7 +767,7 @@ fn movement_animations(
     }
 }
 
-fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<&mut EffectSpawner, Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
+fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
     for (transform, mut linear_velocity, mut player, mut controller) in query.iter_mut() {
         if player.jumps < 2 {
             player.jump_timer.tick(time.delta());
@@ -797,9 +795,18 @@ fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, m
             if player.jumps > 0 {
                 linear_velocity.y = 10.0;
                 player.jumps -= 1;
-                for mut spawner in spawners.iter_mut() {
+                for (mut spawner, _) in spawners.iter_mut() {
                     spawner.active = true;
                     spawner.reset();
+                }
+            }
+        }
+        for (_, light) in spawners.iter_mut() {
+            if let Some(mut l) = light {
+                if l.intensity > 0.01 {
+                    l.intensity *= 0.001_f32.powf(time.delta_secs()); 
+                } else {
+                    l.intensity = 0.0;
                 }
             }
         }
@@ -919,16 +926,7 @@ fn setup(
             Crosshair,
         ));
     });
-    let sky = asset_server.load_with_settings(
-        "Environment/Sky.ktx2",
-        |settings: &mut bevy::render::texture::ImageLoaderSettings| {
-            settings.is_srgb = false;
-            settings.texture_view_descriptor = Some(TextureViewDescriptor {
-                dimension: Some(TextureViewDimension::Cube),
-                ..default()
-            });
-        }
-    );
+    let sky = asset_server.load("Environment/Sky.ktx2");
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -954,14 +952,13 @@ fn setup(
         image: sky.clone(),
         brightness: 1000.0,
         ..Default::default()
+    })
+    .insert(EnvironmentMapLight {
+        diffuse_map: sky.clone(),
+        specular_map: sky.clone(),
+        intensity: 100.0,
+        ..Default::default()
     });
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 5000.0,
-            shadows_enabled: true,
-            ..default()
-        },
-    ));
     commands.spawn(Node {
         width: Val::Percent(100.0),
         height: Val::Percent(100.0),
@@ -969,7 +966,28 @@ fn setup(
         justify_content: JustifyContent::Center,
         padding: UiRect::bottom(Val::Px(40.0)),
         ..default()
+    })
+    .insert(ScreenSpaceAmbientOcclusion {
+        quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra,
+        constant_object_thickness: 5.0,
+        ..default()
     });
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 15000.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -PI / 4.0, -PI / 4.0, 0.0)),
+        CascadeShadowConfigBuilder {
+            num_cascades: 4,
+            minimum_distance: 0.1,
+            maximum_distance: 1000.0,
+            first_cascade_far_bound: 5.0,
+            overlap_proportion: 0.2,
+        }
+        .build()
+    ));
 }
 
 fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>, bot_query: Query<(Entity, &BotData), Added<IsBot>>) {
@@ -978,7 +996,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     };
     let mut writer_smoke = ExprWriter::new();
     let mut color_smoke = bevy_hanabi::Gradient::new();
-    color_smoke.add_key(0.0, Vec4::new(0.6, 0.8, 1.0, 0.8));
+    color_smoke.add_key(0.0, Vec4::new(1.2, 1.6, 2.0, 0.8)); 
     color_smoke.add_key(0.2, Vec4::new(0.3, 0.3, 0.35, 0.6));
     color_smoke.add_key(1.0, Vec4::new(0.1, 0.1, 0.1, 0.0));
     let mut size_smoke = bevy_hanabi::Gradient::new();
@@ -986,8 +1004,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     size_smoke.add_key(1.0, Vec3::splat(1.5));
     let smoke_pos_center = writer_smoke.lit(Vec3::ZERO).expr();
     let smoke_pos_radius = writer_smoke.lit(0.05).expr();
-    let smoke_vel_center = writer_smoke.lit(Vec3::new(0.0, -1.0, 0.0)).expr();
-    let smoke_vel_speed = writer_smoke.lit(12.0).expr();
+    let smoke_vel_center = writer_smoke.lit(Vec3::new(0.0, 1.5, 0.0)).expr();
+    let smoke_vel_speed = writer_smoke.lit(18.0).expr();
     let smoke_lifetime = writer_smoke.lit(1.2).expr();
     let smoke_accel = writer_smoke.lit(Vec3::new(0.0, -2.0, 0.0)).expr();
     let smoke_drag = writer_smoke.lit(3.0).expr();
@@ -1020,8 +1038,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     );
     let mut writer_flame = ExprWriter::new();
     let mut color_flame = bevy_hanabi::Gradient::new();
-    color_flame.add_key(0.0, Vec4::new(1.0, 1.0, 1.0, 1.0));
-    color_flame.add_key(0.5, Vec4::new(0.0, 0.8, 1.0, 1.0));
+    color_flame.add_key(0.0, Vec4::new(10.0, 10.0, 10.0, 1.0));
+    color_flame.add_key(0.3, Vec4::new(0.0, 8.0, 10.0, 1.0));
     color_flame.add_key(1.0, Vec4::new(0.0, 0.2, 0.8, 0.0));
 
     let mut size_flame = bevy_hanabi::Gradient::new();
@@ -1030,8 +1048,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
 
     let flame_pos_center = writer_flame.lit(Vec3::ZERO).expr();
     let flame_pos_radius = writer_flame.lit(0.02).expr();
-    let flame_vel_center = writer_flame.lit(Vec3::new(0.0, -1.0, 0.0)).expr();
-    let flame_vel_speed = writer_flame.lit(15.0).expr();
+    let flame_vel_center = writer_flame.lit(Vec3::new(0.0, 2.0, 0.0)).expr();
+    let flame_vel_speed = writer_flame.lit(25.0).expr();
     let flame_lifetime = writer_flame.lit(0.3).expr();
 
     let flame_module = writer_flame.finish();
@@ -1082,6 +1100,12 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         EffectSpawner::default(),
         Transform::from_xyz(-0.3, -1.0, 0.0), 
         BottomThrusterLeft,
+        PointLight {
+            color: Color::srgb(0.0, 0.8, 1.0),
+            intensity: 0.0,
+            range: 15.0,
+            ..Default::default()
+        }
     )).id();
     let right_thruster_flame = commands.spawn((
         Name::new("Right Thruster Flame"),
@@ -1089,6 +1113,12 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         EffectSpawner::default(),
         Transform::from_xyz(0.3, -1.0, 0.0), 
         BottomThrusterRight,
+        PointLight {
+            color: Color::srgb(0.0, 0.8, 1.0),
+            intensity: 0.0,
+            range: 15.0,
+            ..Default::default()
+        }
     )).id();
     commands
         .entity(player)
@@ -1492,15 +1522,16 @@ fn main_menu(
             }
             commands.spawn((
                 Node::default(),
-                NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
+                NodeStyleSheet::new(asset_server.load("menu/settings.css")),
                 MainMenuUi,
                 children![
                     (
                         Text::new(menu.options[menu.index].clone()), 
+                        Name::new("cycle_text"),
                         CycleTextTarget,
                         Node::default()
                     ),
-                    (Button, ApplySettingsButton, Node::default(), children![(Text::new("Apply"), Node::default())]),
+                    (Button, Name::new("apply_button"), ApplySettingsButton, Node::default(), children![(Text::new("Apply"), Node::default())]),
                 ],
             ));
         }
