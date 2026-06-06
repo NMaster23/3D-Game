@@ -1665,6 +1665,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_symbios_ground"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4909dd27f91defd7e42009b1e0843bfa5566b907c02213fbafbe39aa1824dd44"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "symbios-ground",
+]
+
+[[package]]
 name = "bevy_tasks"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2226,6 +2237,7 @@ dependencies = [
  "bevy_flair",
  "bevy_hanabi",
  "bevy_kira_audio",
+ "bevy_symbios_ground",
  "include_dir",
  "log",
  "rand 0.10.1",
@@ -3767,9 +3779,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.29"
+version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "mach2"
@@ -5515,6 +5527,17 @@ dependencies = [
  "skrifa 0.40.0",
  "yazi",
  "zeno",
+]
+
+[[package]]
+name = "symbios-ground"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aeea6ba06bf478be22d9fbb072d557732c95a6772bd66cbe5af3b2431f1a435a"
+dependencies = [
+ "rand 0.9.4",
+ "rand_pcg",
+ "serde",
 ]
 
 [[package]]

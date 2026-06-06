@@ -1,4 +1,4 @@
-use bevy::{anti_alias::taa::TemporalAntiAliasing, audio::AudioPlugin, color::palettes::css::{self}, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{anti_alias::taa::TemporalAntiAliasing, audio::AudioPlugin, color::palettes::css::{self}, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -7,6 +7,9 @@ use std::f32::consts::PI;
 use bevy_hanabi::prelude::*;
 use bevy_flair::prelude::*;
 use bevy_kira_audio::prelude::*;
+use bevy_symbios_ground::{
+    FbmNoise, GroundMaterialSettings, HeightMap, HeightMapMeshBuilder, NormalMethod, TerrainGenerator, build_heightfield_collider, splat_to_image, SplatMapper, SplatTexture,
+};
 
 #[derive(Component)]
 pub struct Lighting;
@@ -203,18 +206,22 @@ struct CycleTextTarget;
 
 #[derive(Resource)]
 struct PlayerModel {
-    model_name: String
-}
-
-#[derive(Resource)]
-struct TerrainModel {
-    model_name: String
+    model_name: String,
 }
 
 #[derive(Resource)]
 struct SsaoEnabled {
     pub enabled: bool,
 }
+
+#[derive(Resource, Clone, Copy, PartialEq)]
+pub enum TerrainAlgorithm {
+    AreaWeighted,
+    Sobel,
+}
+
+#[derive(Resource)]
+pub struct CurrentHeightMap(pub HeightMap);
 
 impl Default for SsaoEnabled {
     fn default() -> Self {
@@ -727,6 +734,40 @@ fn bot_handling(
     }
 }
 
+fn procedural_terrain(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, algorithm: Res<TerrainAlgorithm>) {
+    let mut heightmap = HeightMap::new(256, 256, 1.0);
+    FbmNoise::new(1337).generate(&mut heightmap);
+    heightmap.normalize();
+    let normal_algorithm = match *algorithm {
+        TerrainAlgorithm::AreaWeighted => NormalMethod::AreaWeighted,
+        TerrainAlgorithm::Sobel => NormalMethod::Sobel,
+    };
+    let mesh = HeightMapMeshBuilder::new()
+        .with_normal_method(normal_algorithm)
+        .with_uv_tile_size(8.0)
+        .build(&heightmap);
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(materials.add(StandardMaterial::default())),
+        Transform::from_xyz(0.0, 0.0, 0.0)
+    ));
+    let collider = build_heightfield_collider(&heightmap);
+    commands.spawn((
+        collider,
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        RigidBody::Static,
+    ));
+}
+
+fn splat_material(mut commands: Commands, mut images: ResMut<Assets<Image>>, heightmap: Res<CurrentHeightMap>) {
+    let weight_map = SplatMapper::default().generate(&heightmap.0);
+    let image = splat_to_image(&weight_map);
+    commands.insert_resource(SplatTexture {
+        handle: images.add(image)
+    });
+    commands.insert_resource(GroundMaterialSettings::new(weight_map));
+}
+
 fn despawn_ray(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut DespawnTimer)>) {
     for (e, mut t) in q.iter_mut() {
         if t.0.tick(time.delta()).just_finished() {
@@ -771,7 +812,7 @@ fn setup_scene_once_loaded(
 fn movement_animations(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut animation_players: Query<(Entity, &mut AnimationPlayer, &mut AnimationTransitions)>,
-    parents: Query<&Parent>,
+    parents: Query<&ChildOf>,
     player_query: Query<&Player>,
     bot_query: Query<&CharacterController, With<Bots>>,
 ) {
@@ -803,7 +844,7 @@ fn movement_animations(
                 break;
             }
             if let Ok(parent) = parents.get(current_entity) {
-                current_entity = parent.get();
+                current_entity = parent.0;
             } else {
                 break;
             }
@@ -945,23 +986,7 @@ fn setup(
     mut commands: Commands,
     graphics: Res<SsaoEnabled>,
     asset_server: Res<AssetServer>,
-    mut terrain_gen: ResMut<TerrainGen>,
-    terrain: Res<TerrainModel>,
 ) {
-    let floor_id = commands.spawn((
-        Collider::cuboid(100.0, 1.0, 100.0),
-        RigidBody::Static,
-        Transform::from_xyz(0.0, -5.0, 0.0)
-    )).id();
-    terrain_gen.loading_collision = Some(floor_id);
-    let terrain = asset_server.load(GltfAssetLabel::Scene(0).from_asset(terrain.model_name.clone()));
-    terrain_gen.terrain = terrain.clone();
-    commands.spawn((
-        SceneRoot(terrain),
-        RigidBody::Static,
-        Transform::from_xyz(0.0, -10.0, 0.0).with_scale(Vec3::splat(2000.0)),
-        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh)
-    ));
     commands.spawn((
         Node {
             width: Val::Percent(100.0),
@@ -1589,29 +1614,28 @@ fn main_menu(
     }
 }
 
-fn settings_apply(q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, mut player_model: ResMut<PlayerModel>, mut terrain_model: ResMut<TerrainModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
+fn settings_apply(mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, mut player_model: ResMut<PlayerModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
     for interaction in query.iter() {
         if *interaction == Interaction::Pressed {
             println!("Settings applied!");
             match menu.index {
                 0 => {
                     player_model.model_name = "Player/Player.glb".to_string();
-                    terrain_model.model_name = "Environment/Terrain.glb".to_string();
                     graphics.enabled = false;
                 }
                 1 => {
                     player_model.model_name = "Player/Player_Highpoly.glb".to_string();
-                    terrain_model.model_name = "Environment/Terrain_Medpoly.glb".to_string();
+                    *algorithm = TerrainAlgorithm::Sobel;
                     graphics.enabled = false;
                 }
                 2 => {
                     player_model.model_name = "Player/Player_Highpoly.glb".to_string();
-                    terrain_model.model_name = "Environment/Terrain_Highpoly.glb".to_string();
+                    *algorithm = TerrainAlgorithm::AreaWeighted;
                     graphics.enabled = true;
                 }
                 _ => {
                     player_model.model_name = "Player/Player.glb".to_string();
-                    terrain_model.model_name = "Environment/Terrain.glb".to_string();
+                    *algorithm = TerrainAlgorithm::Sobel;
                     graphics.enabled = false;
                 }
             }
@@ -1686,6 +1710,7 @@ fn main() {
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
         .insert_resource(Hitmarker)
+        .insert_resource(TerrainAlgorithm::Sobel)
         .insert_resource(HitmarkerTimer(Timer::from_seconds(0.1, TimerMode::Once)))
         .insert_resource(CycleMenu {
             options: vec!["< Low Preset >".to_string(), "< Medium Preset >".to_string(), "< High Preset >".to_string()],
@@ -1694,19 +1719,16 @@ fn main() {
         .insert_resource(PlayerModel {
             model_name: "Player/Player.glb".to_string()
         })
-        .insert_resource(TerrainModel {
-            model_name: "Environment/Terrain.glb".to_string()
-        })
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
         .add_systems(Update, (main_menu, cycle_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
-        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup))
+        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup, splat_material, procedural_terrain))
         .add_systems(
             Update,
-            (   
+            (
                 player_movement,
                 setup_scene_once_loaded,
                 movement_animations,
@@ -1722,6 +1744,7 @@ fn main() {
                 player_death,
                 botdead,
                 particle_effects,
+                bevy_symbios_ground::sync_splat_texture,
             ).run_if(in_state(AppState::InGame)),
         )
         .add_systems(
