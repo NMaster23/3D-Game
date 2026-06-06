@@ -1,4 +1,4 @@
-use bevy::{anti_alias::taa::TemporalAntiAliasing, color::palettes::css::{self}, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{camera::TemporalJitter, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{anti_alias::taa::TemporalAntiAliasing, audio::AudioPlugin, color::palettes::css::{self}, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -6,6 +6,7 @@ use bevy_embedded_assets::EmbeddedAssetPlugin;
 use std::f32::consts::PI;
 use bevy_hanabi::prelude::*;
 use bevy_flair::prelude::*;
+use bevy_kira_audio::prelude::*;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -75,6 +76,7 @@ struct BotData {
     bot_offset: f32,
     hit_number: i32,
     fire_timer: Timer,
+    footstep_timer: Timer,
 }
 
 #[derive(Component)]
@@ -207,6 +209,17 @@ struct PlayerModel {
 #[derive(Resource)]
 struct TerrainModel {
     model_name: String
+}
+
+#[derive(Resource)]
+struct SsaoEnabled {
+    pub enabled: bool,
+}
+
+impl Default for SsaoEnabled {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
 }
 
 impl UiMaterial for JumpIndicator {
@@ -532,7 +545,7 @@ fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResM
     }
 }
 
-fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, mut state: ResMut<NextState<AppState>>) {
+fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, mut state: ResMut<NextState<AppState>>, mut commands: Commands, camera_query: Query<Entity, With<Camera3d>>) {
     if mouse.just_pressed(MouseButton::Left) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
@@ -540,6 +553,9 @@ fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode
     if keycode.just_pressed(KeyCode::Escape) {
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
+        for entity in camera_query.iter() {
+            commands.entity(entity).despawn();
+        }
         state.set(AppState::MainMenu);
     }
 }
@@ -587,6 +603,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
         bot_offset: 0.0,
         hit_number: hits_num,
         fire_timer: Timer::from_seconds(1.0, TimerMode::Repeating),
+        footstep_timer: Timer::from_seconds(0.5, TimerMode::Repeating),
     };
     commands.insert_resource(LivingBots(bot_number));
     for i in 0..bots.bot_quantity {
@@ -604,6 +621,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
                 bot_offset: i as f32 * 2.0 - (bots.bot_quantity as f32 - 1.0) * 2.0 / 2.0,
                 hit_number: hits_num,
                 fire_timer: Timer::from_seconds(rand::rng().random_range(1.5..2.0), TimerMode::Repeating),
+                footstep_timer: Timer::from_seconds(0.5, TimerMode::Repeating),
             },
             IsBot,
             Transform::from_xyz(bots.bot_offset, 10.0, -5.0),
@@ -618,6 +636,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
 fn bot_handling(
     time: Res<Time>,
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ProjectileFlash>>,
     mut ray_cast: MeshRayCast,
     mut gizmos: Gizmos,
@@ -641,6 +660,14 @@ fn bot_handling(
             c.move_direction = f_dir * 2.5;
             if f_dir.length_squared() > 0.0 {
                 t.rotation = t.rotation.slerp(Quat::from_rotation_y(f_dir.x.atan2(f_dir.z)), time.delta_secs() * 5.0);
+                if b.footstep_timer.tick(time.delta()).just_finished() {
+                    commands.spawn((
+                        Transform::from_translation(t.translation),
+                        SpatialAudioEmitter {
+                            instances: vec![asset_server.load("Player/Footstep.mp3")]
+                        }
+                    ));
+                }
             }
             lv.x = c.move_direction.x + rand::rng().random_range(-5.0..5.0);
             lv.z = c.move_direction.z + rand::rng().random_range(-5.0..5.0);
@@ -649,7 +676,7 @@ fn bot_handling(
                 let mut total_length = 0.0;
                 let max_range = 100.0;
                 let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
-                let ray = Ray3d::new(t.translation + Vec3::new(0.0, 0.75, 0.0), ray_dir);
+                let ray = Ray3d::new(t.translation + Vec3::new(0.0, 1.25, 0.0), ray_dir);
                 let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
                 let hit_number = 1;
                 let hit_chance = rand::rng().random_range(bot_config.accuracy_range.clone());
@@ -743,31 +770,56 @@ fn setup_scene_once_loaded(
 
 fn movement_animations(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut animation_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
-    _animations: Res<Animations>,
-    _current_animation: Local<usize>,
+    mut animation_players: Query<(Entity, &mut AnimationPlayer, &mut AnimationTransitions)>,
+    parents: Query<&Parent>,
+    player_query: Query<&Player>,
+    bot_query: Query<&CharacterController, With<Bots>>,
 ) {
-    for (mut player, _transitions) in &mut animation_players {
+    for (entity, mut player, _transitions) in &mut animation_players {
         let Some((&playing_animation_index, _)) = player.playing_animations().next() else {
             continue;
         };
-        if keyboard_input.pressed(KeyCode::KeyW) {
-            let playing_animation = player.animation_mut(playing_animation_index).unwrap();
-            playing_animation.set_speed(1.0);
-            playing_animation.resume();
-        } else if keyboard_input.pressed(KeyCode::KeyS) {
-            let playing_animation = player.animation_mut(playing_animation_index).unwrap();
-            playing_animation.set_speed(-1.0);
-            playing_animation.resume();
+        let mut current_entity = entity;
+        let mut is_moving = false;
+        let mut speed = 1.0;
+        
+        loop {
+            if player_query.contains(current_entity) {
+                if keyboard_input.pressed(KeyCode::KeyW) {
+                    is_moving = true;
+                    speed = 1.0;
+                } else if keyboard_input.pressed(KeyCode::KeyS) {
+                    is_moving = true;
+                    speed = -1.0;
+                } else if keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::KeyD) {
+                    is_moving = true;
+                }
+                break;
+            } else if let Ok(controller) = bot_query.get(current_entity) {
+                if controller.move_direction.length_squared() > 0.01 {
+                    is_moving = true;
+                    speed = 1.0;
+                }
+                break;
+            }
+            if let Ok(parent) = parents.get(current_entity) {
+                current_entity = parent.get();
+            } else {
+                break;
+            }
         }
-        else {
-            let playing_animation = player.animation_mut(playing_animation_index).unwrap();
+        
+        let playing_animation = player.animation_mut(playing_animation_index).unwrap();
+        if is_moving {
+            playing_animation.set_speed(speed);
+            playing_animation.resume();
+        } else {
             playing_animation.pause();
         }
     }
 }
 
-fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
+fn player_movement(asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
     for (transform, mut linear_velocity, mut player, mut controller) in query.iter_mut() {
         if player.jumps < 2 {
             player.jump_timer.tick(time.delta());
@@ -781,15 +833,19 @@ fn player_movement(time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, m
         let mut move_direction = Vec3::ZERO;
         if keyboard_input.pressed(KeyCode::KeyW) && player.health > 0 {
             move_direction.z += 1.0;
+            audio.play(asset_server.load("Player/Footstep.mp3"));
         }
         if keyboard_input.pressed(KeyCode::KeyS) && player.health > 0 {
             move_direction.z -= 1.0;
+            audio.play(asset_server.load("Player/Footstep.mp3"));
         }
         if keyboard_input.pressed(KeyCode::KeyA) && player.health > 0 {
             move_direction.x += 1.0;
+            audio.play(asset_server.load("Player/Footstep.mp3"));
         }
         if keyboard_input.pressed(KeyCode::KeyD) && player.health > 0 {
             move_direction.x -= 1.0;
+            audio.play(asset_server.load("Player/Footstep.mp3"));
         }
         if keyboard_input.just_pressed(KeyCode::Space) && player.health > 0 {
             if player.jumps > 0 {
@@ -887,10 +943,10 @@ fn crosshair_spread(mut query: Query<&mut Node, With<Crosshair>>, time: Res<Time
 
 fn setup(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    graphics: Res<SsaoEnabled>,
     asset_server: Res<AssetServer>,
     mut terrain_gen: ResMut<TerrainGen>,
+    terrain: Res<TerrainModel>,
 ) {
     let floor_id = commands.spawn((
         Collider::cuboid(100.0, 1.0, 100.0),
@@ -898,7 +954,7 @@ fn setup(
         Transform::from_xyz(0.0, -5.0, 0.0)
     )).id();
     terrain_gen.loading_collision = Some(floor_id);
-    let terrain = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Environment/Terrain.glb"));
+    let terrain = asset_server.load(GltfAssetLabel::Scene(0).from_asset(terrain.model_name.clone()));
     terrain_gen.terrain = terrain.clone();
     commands.spawn((
         SceneRoot(terrain),
@@ -927,22 +983,20 @@ fn setup(
         ));
     });
     let sky = asset_server.load("Environment/Sky.ktx2");
-    commands.spawn((
+    let mut camera = commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
         Bloom::NATURAL,
         Hdr,
         Msaa::Off,
-        ScreenSpaceAmbientOcclusion { quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra, constant_object_thickness: 0.5 },
         TemporalAntiAliasing::default(),
         TemporalJitter::default(),
         Tonemapping::TonyMcMapface,
-        bevy::pbr::ScreenSpaceReflections::default(),
         DepthPrepass,
         NormalPrepass,
         MotionVectorPrepass,
-    ))
-    .insert(VolumetricFog {
+    ));
+    camera.insert(VolumetricFog {
         ambient_color: Color::srgb(0.1, 0.1, 0.12),
         ambient_intensity: 0.1,
         step_count: 64,
@@ -952,24 +1006,26 @@ fn setup(
         image: sky.clone(),
         brightness: 1000.0,
         ..Default::default()
-    })
-    .insert(EnvironmentMapLight {
-        diffuse_map: sky.clone(),
-        specular_map: sky.clone(),
-        intensity: 100.0,
-        ..Default::default()
     });
+    if graphics.enabled {
+        camera.insert(ScreenSpaceAmbientOcclusion {
+            quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra,
+            constant_object_thickness: 0.2,
+            ..default()
+        })
+        .insert(EnvironmentMapLight {
+            diffuse_map: sky.clone(),
+            specular_map: sky.clone(),
+            intensity: 100.0,
+            ..Default::default()
+        });
+    }
     commands.spawn(Node {
         width: Val::Percent(100.0),
         height: Val::Percent(100.0),
         align_items: AlignItems::FlexEnd,
         justify_content: JustifyContent::Center,
         padding: UiRect::bottom(Val::Px(40.0)),
-        ..default()
-    })
-    .insert(ScreenSpaceAmbientOcclusion {
-        quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra,
-        constant_object_thickness: 5.0,
         ..default()
     });
     commands.spawn((
@@ -1153,7 +1209,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     let projectile_effect_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
-            .with_simulation_space(SimulationSpace::Local)
+            .with_simulation_space(SimulationSpace::Global)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
@@ -1211,7 +1267,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     let projectile_effect_2_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
-            .with_simulation_space(SimulationSpace::Local)
+            .with_simulation_space(SimulationSpace::Global)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
@@ -1273,7 +1329,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     
     let projectile_effect_3_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(800.0.into()), module)
-            .with_simulation_space(SimulationSpace::Local)
+            .with_simulation_space(SimulationSpace::Global)
             .with_alpha_mode(bevy_hanabi::AlphaMode::Blend) 
             .init(init_pos)
             .init(init_vel)
@@ -1302,10 +1358,6 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         ViewVisibility::default(),
         ProjectileFlashEffect(3),
     )).id();
-
-    commands
-        .entity(player)
-        .add_children(&[projectile_flash, projectile_effect_2, projectile_effect_3]);
 }
 
 fn screen_shake(mut camera: Query<&mut Transform, With<Camera>>, mut commands: Commands, time: Res<Time>, mut shake: ResMut<ScreenShake>) {
@@ -1360,7 +1412,7 @@ fn shooting(
         Single<&Window>,
     ),
     mut commands: Commands,
-    mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &ProjectileFlashEffect), Without<Player>>,
+    mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &ProjectileFlashEffect), (Without<Player>, Without<Camera3d>)>,
     mut fire_cooldown: Local<f32>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut player_query: Query<&mut Transform, With<Player>>,
@@ -1428,12 +1480,10 @@ fn shooting(
     };
     crosshair.y -= 200.0;
     let forward = -player_transform.forward();
-    let ray_pos = player_transform.translation + Vec3::new(0.0, 0.75, 0.0) + *forward * 2.25;
-    let projectile_dir = (target - ray_pos).normalize_or_zero();
+    let ray_pos = player_transform.translation + Vec3::new(0.0, 1.25, 0.0) + *forward * 2.25;
     let total_spread = base_spread + (crosshair_spread.spread * 0.2);
     let mut dir_vec = (target - ray_pos).normalize_or_zero();
     if dir_vec == Vec3::ZERO { dir_vec = *camera_ray.direction; }
-    
     if total_spread > 0.0 {
         dir_vec.x += rand::rng().random_range(-total_spread..total_spread);
         dir_vec.y += rand::rng().random_range(-total_spread..total_spread);
@@ -1443,8 +1493,9 @@ fn shooting(
     ray_handling(impact_effects, commands, timer, q, ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
     for (mut spawner, mut transform, projectile) in shooting_effects.iter_mut() {
         if projectile.0 == current_weapon {
-            Transform::from_translation(ray_pos).looking_to(projectile_dir, Vec3::Y);
+            transform.translation = ray_pos;
             transform.scale = Vec3::splat(flash_scale);
+            transform.look_to(dir, Vec3::Y);
             spawner.active = true;
             spawner.reset();
         }
@@ -1471,7 +1522,7 @@ fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
         children![
             (Node::default(), Name::new("game_menu"), children![
                 (Text::new("Mech Game".to_string()), Name::new("menu_title"), Node::default()),
-                (Button, StartButton, Node::default(), children![(Text::new("Start Game"), Node::default())]),
+                (Button, StartButton, Node::default(), children![(Text::new("Start"), Node::default())]),
                 (Button, SettingsButton, Node::default(), children![(Text::new("Settings"), Node::default())]),
                 (Node::default(), Name::new("floating_borders"))
             ]),
@@ -1538,7 +1589,7 @@ fn main_menu(
     }
 }
 
-fn settings_apply(query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, mut player_model: ResMut<PlayerModel>, mut terrain_model: ResMut<TerrainModel>) {
+fn settings_apply(q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, mut player_model: ResMut<PlayerModel>, mut terrain_model: ResMut<TerrainModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
     for interaction in query.iter() {
         if *interaction == Interaction::Pressed {
             println!("Settings applied!");
@@ -1546,20 +1597,40 @@ fn settings_apply(query: Query<&Interaction, (Changed<Interaction>, With<ApplySe
                 0 => {
                     player_model.model_name = "Player/Player.glb".to_string();
                     terrain_model.model_name = "Environment/Terrain.glb".to_string();
+                    graphics.enabled = false;
                 }
                 1 => {
                     player_model.model_name = "Player/Player_Highpoly.glb".to_string();
                     terrain_model.model_name = "Environment/Terrain_Medpoly.glb".to_string();
+                    graphics.enabled = false;
                 }
                 2 => {
                     player_model.model_name = "Player/Player_Highpoly.glb".to_string();
                     terrain_model.model_name = "Environment/Terrain_Highpoly.glb".to_string();
+                    graphics.enabled = true;
                 }
                 _ => {
                     player_model.model_name = "Player/Player.glb".to_string();
                     terrain_model.model_name = "Environment/Terrain.glb".to_string();
+                    graphics.enabled = false;
                 }
             }
+            for entity in q_main_menu.iter() {
+                commands.entity(entity).despawn();
+            }
+            commands.spawn((
+                Node::default(),
+                NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
+                MainMenuUi,
+                children![
+                    (Node::default(), Name::new("game_menu"), children![
+                        (Text::new("Mech Game".to_string()), Name::new("menu_title"), Node::default()),
+                        (Button, StartButton, Node::default(), children![(Text::new("Start"), Node::default())]),
+                        (Button, SettingsButton, Node::default(), children![(Text::new("Settings"), Node::default())]),
+                        (Node::default(), Name::new("floating_borders"))
+                    ]),
+                ],
+            ));
         }
     }
 }
@@ -1575,6 +1646,7 @@ fn main_menu_handling(mut commands: Commands, query: Query<Entity, With<MainMenu
 
 fn main() {
     App::new()
+        .add_plugins(AudioPlugin)
         .add_plugins(EmbeddedAssetPlugin {
             mode: bevy_embedded_assets::PluginMode::ReplaceDefault,
         })
@@ -1583,6 +1655,17 @@ fn main() {
                 title: "Mech Game".into(),
                 resolution: WindowResolution::new(1920, 1080),
                 present_mode: bevy::window::PresentMode::AutoVsync,
+                ..default()
+            }),
+            ..default()
+        })
+        .set(RenderPlugin {
+            render_creation: RenderCreation::Automatic(WgpuSettings {
+                limits: WgpuLimits {
+                    max_sampled_textures_per_shader_stage: 256,
+                    max_samplers_per_shader_stage: 256,
+                    ..default()
+                },
                 ..default()
             }),
             ..default()
@@ -1595,6 +1678,7 @@ fn main() {
         .init_asset::<WeaponData>()
         .init_asset::<ProjectileFlash>()
         .init_state::<AppState>()
+        .init_resource::<SsaoEnabled>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
         .init_resource::<SelectedWeapon>()

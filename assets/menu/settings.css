@@ -6,6 +6,7 @@
   justify-content: center;
   font-size: 35px;
   color: rgb(0, 104, 117);
+  flex-direction: column;
 }
 
 .cycle-text {
