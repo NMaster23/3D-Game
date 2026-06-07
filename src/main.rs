@@ -1,4 +1,4 @@
-use bevy::{anti_alias::taa::TemporalAntiAliasing, audio::AudioPlugin, color::palettes::css::{self}, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{anti_alias::taa::TemporalAntiAliasing, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -364,7 +364,6 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
                 ..Default::default()
             })
     );
-
     commands.insert_resource(ImpactEffects {
         spark_effect,
         arc_effect,
@@ -671,7 +670,7 @@ fn bot_handling(
                     commands.spawn((
                         Transform::from_translation(t.translation),
                         SpatialAudioEmitter {
-                            instances: vec![asset_server.load("Player/Footstep.mp3")]
+                            instances: vec![asset_server.load("assets/Player/Footstep.ogg")]
                         }
                     ));
                 }
@@ -734,7 +733,13 @@ fn bot_handling(
     }
 }
 
-fn procedural_terrain(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, algorithm: Res<TerrainAlgorithm>) {
+fn procedural_terrain(
+    mut commands: Commands, 
+    mut meshes: ResMut<Assets<Mesh>>, 
+    mut materials: ResMut<Assets<StandardMaterial>>, 
+    algorithm: Res<TerrainAlgorithm>,
+    mut images: ResMut<Assets<Image>>,
+) {
     let mut heightmap = HeightMap::new(256, 256, 1.0);
     FbmNoise::new(1337).generate(&mut heightmap);
     heightmap.normalize();
@@ -742,6 +747,7 @@ fn procedural_terrain(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, 
         TerrainAlgorithm::AreaWeighted => NormalMethod::AreaWeighted,
         TerrainAlgorithm::Sobel => NormalMethod::Sobel,
     };
+    let collider = build_heightfield_collider(&heightmap);
     let mesh = HeightMapMeshBuilder::new()
         .with_normal_method(normal_algorithm)
         .with_uv_tile_size(8.0)
@@ -749,23 +755,16 @@ fn procedural_terrain(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, 
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial::default())),
-        Transform::from_xyz(0.0, 0.0, 0.0)
-    ));
-    let collider = build_heightfield_collider(&heightmap);
-    commands.spawn((
-        collider,
-        Transform::from_xyz(0.0, 0.0, 0.0),
+        Transform::from_xyz(-1024.0, 0.0, -1024.0).with_scale(Vec3::new(1.0, 50.0, 1.0)),
         RigidBody::Static,
     ));
-}
-
-fn splat_material(mut commands: Commands, mut images: ResMut<Assets<Image>>, heightmap: Res<CurrentHeightMap>) {
-    let weight_map = SplatMapper::default().generate(&heightmap.0);
+    let weight_map = SplatMapper::default().generate(&heightmap);
     let image = splat_to_image(&weight_map);
     commands.insert_resource(SplatTexture {
         handle: images.add(image)
     });
     commands.insert_resource(GroundMaterialSettings::new(weight_map));
+    commands.insert_resource(CurrentHeightMap(heightmap));
 }
 
 fn despawn_ray(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut DespawnTimer)>) {
@@ -874,19 +873,19 @@ fn player_movement(asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: 
         let mut move_direction = Vec3::ZERO;
         if keyboard_input.pressed(KeyCode::KeyW) && player.health > 0 {
             move_direction.z += 1.0;
-            audio.play(asset_server.load("Player/Footstep.mp3"));
+            audio.play(asset_server.load("assets/Player/Footstep.ogg"));
         }
         if keyboard_input.pressed(KeyCode::KeyS) && player.health > 0 {
             move_direction.z -= 1.0;
-            audio.play(asset_server.load("Player/Footstep.mp3"));
+            audio.play(asset_server.load("assets/Player/Footstep.ogg"));
         }
         if keyboard_input.pressed(KeyCode::KeyA) && player.health > 0 {
             move_direction.x += 1.0;
-            audio.play(asset_server.load("Player/Footstep.mp3"));
+            audio.play(asset_server.load("assets/Player/Footstep.ogg"));
         }
         if keyboard_input.pressed(KeyCode::KeyD) && player.health > 0 {
             move_direction.x -= 1.0;
-            audio.play(asset_server.load("Player/Footstep.mp3"));
+            audio.play(asset_server.load("assets/Player/Footstep.ogg"));
         }
         if keyboard_input.just_pressed(KeyCode::Space) && player.health > 0 {
             if player.jumps > 0 {
@@ -1031,7 +1030,8 @@ fn setup(
         image: sky.clone(),
         brightness: 1000.0,
         ..Default::default()
-    });
+    })
+    .insert(SpatialAudioReceiver);
     if graphics.enabled {
         camera.insert(ScreenSpaceAmbientOcclusion {
             quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra,
@@ -1670,30 +1670,35 @@ fn main_menu_handling(mut commands: Commands, query: Query<Entity, With<MainMenu
 
 fn main() {
     App::new()
-        .add_plugins(AudioPlugin)
         .add_plugins(EmbeddedAssetPlugin {
             mode: bevy_embedded_assets::PluginMode::ReplaceDefault,
         })
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Mech Game".into(),
-                resolution: WindowResolution::new(1920, 1080),
-                present_mode: bevy::window::PresentMode::AutoVsync,
-                ..default()
-            }),
-            ..default()
-        })
-        .set(RenderPlugin {
-            render_creation: RenderCreation::Automatic(WgpuSettings {
-                limits: WgpuLimits {
-                    max_sampled_textures_per_shader_stage: 256,
-                    max_samplers_per_shader_stage: 256,
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Mech Game".into(),
+                        resolution: WindowResolution::new(1920, 1080),
+                        present_mode: bevy::window::PresentMode::AutoVsync,
+                        ..default()
+                    }),
                     ..default()
-                },
-                ..default()
-            }),
-            ..default()
-        }))
+                })
+                .set(RenderPlugin {
+                    render_creation: RenderCreation::Automatic(WgpuSettings {
+                        limits: WgpuLimits {
+                            max_sampled_textures_per_shader_stage: 256,
+                            max_samplers_per_shader_stage: 256,
+                            ..default()
+                        },
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .disable::<bevy::audio::AudioPlugin>(),
+        )
+        .add_plugins(bevy_kira_audio::AudioPlugin)
+        .add_plugins(bevy_kira_audio::SpatialAudioPlugin)
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
         .add_plugins(UiMaterialPlugin::<WeaponSelectorUI>::default())
@@ -1725,7 +1730,7 @@ fn main() {
         .add_systems(Update, (main_menu, cycle_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
-        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup, splat_material, procedural_terrain))
+        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup, procedural_terrain))
         .add_systems(
             Update,
             (
