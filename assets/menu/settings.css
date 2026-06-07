@@ -7,10 +7,67 @@
   font-size: 35px;
   color: rgb(0, 104, 117);
   flex-direction: column;
+  --floating-borders-top: 103px;
+  --floating-borders-spacing: 90px;
+  --floating-borders-image: url("menu/Frame.png");
 }
 
 .cycle-text {
     font-size: 25px;
     color: rgb(0, 104, 117);
     transition: color 0.5s;
+}
+
+button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    margin-top: 30px;
+    background-color: transparent;
+
+    font-size: 20px;
+    color: rgb(20, 20, 21);
+    &:hover {
+        color: #E6E6E6;
+    }
+
+    text {
+        transition: color 0.6s;
+    }
+}
+
+button, #floating_borders {
+    width: 250px;
+    height: 60px;
+}
+
+#floating_borders {
+    display: flex;
+    position: absolute;
+    top: var(--floating-borders-top);
+    transition: top 0.6s;
+    margin-top: 0;
+    background-image: var(--floating-borders-image);
+    -bevy-image-mode: sliced(20.0px);
+}
+
+button:nth-child(2):hover ~ #floating_borders {
+    top: calc(var(--floating-borders-top) + var(--floating-borders-spacing) * 0);
+}
+
+button:nth-child(3):hover ~ #floating_borders {
+    top: calc(var(--floating-borders-top) + var(--floating-borders-spacing) * 1);
+}
+
+button:nth-child(4):hover ~ #floating_borders {
+    top: calc(var(--floating-borders-top) + var(--floating-borders-spacing) * 2);
+}
+
+button:nth-child(5):hover ~ #floating_borders {
+    top: calc(var(--floating-borders-top) + var(--floating-borders-spacing) * 3);
+}
+
+button:hover ~ #floating_borders {
+    animation: 2.0s linear 2 borders-animation;
 }

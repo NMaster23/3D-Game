@@ -1,4 +1,4 @@
-use bevy::{anti_alias::taa::TemporalAntiAliasing, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, graph::NodePbr::ScreenSpaceReflections}, post_process::bloom::Bloom, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{anti_alias::taa::TemporalAntiAliasing, app::AppExit, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel}, post_process::{bloom::Bloom, dof::DepthOfFieldMode}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -10,6 +10,9 @@ use bevy_kira_audio::prelude::*;
 use bevy_symbios_ground::{
     FbmNoise, GroundMaterialSettings, HeightMap, HeightMapMeshBuilder, NormalMethod, TerrainGenerator, build_heightfield_collider, splat_to_image, SplatMapper, SplatTexture,
 };
+use bevy::core_pipeline::dof::DepthOfField;
+use bevy::core_pipeline::motion_blur::MotionBlur;
+use bevy::pbr::ScreenSpaceReflections;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -100,6 +103,7 @@ pub struct PlayerData {
     player_id: u32,
     jumps: u32,
     jump_timer: Timer,
+    footstep_timer: Timer,
 }
 
 #[derive(Asset, TypePath, Debug, Clone)]
@@ -213,6 +217,9 @@ struct PlayerModel {
 struct SsaoEnabled {
     pub enabled: bool,
 }
+
+#[derive(Resource, Default)]
+struct AimDistance(f32);
 
 #[derive(Resource, Clone, Copy, PartialEq)]
 pub enum TerrainAlgorithm {
@@ -370,7 +377,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     });
 }
 
-fn ray_handling(impact_effects: Res<ImpactEffects>, mut commands: Commands, mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
+fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapon: u32, impact_effects: Res<ImpactEffects>, mut commands: Commands, mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
     let mut ray = Ray3d::new(ray_pos, ray_dir);
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
@@ -392,7 +399,6 @@ fn ray_handling(impact_effects: Res<ImpactEffects>, mut commands: Commands, mut 
         ray.direction = Dir3::new(ray.direction.reflect(hit.normal)).unwrap();
         ray.origin = hit.point + ray.direction * 1e-6;
         let mut current_entity = *entity;
-        let mut dir_y: f32 = 0.0;
         loop {
             if let Ok(parent) = parents.get(current_entity) {
                 current_entity = parent.0;
@@ -403,6 +409,15 @@ fn ray_handling(impact_effects: Res<ImpactEffects>, mut commands: Commands, mut 
                 let final_damage = (damage as f32 * (1.0 - total_length / max_range)).max(1.0) as i32;
                 bot_data.health -= final_damage;
                 timer.0.reset();
+                if current_weapon == 2 {
+                    let shot_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).handle();
+                    commands.spawn((
+                        Transform::from_translation(hit.point),
+                        SpatialAudioEmitter {
+                            instances: vec![shot_sound]
+                        }
+                    ));
+                }
                 println!("Bot hit! Damage: {}, Distance: {:.2}", final_damage, total_length);
                 for mut color in &mut query {
                     color.0 = Color::srgba(1.0, 1.0, 1.0, 0.75);
@@ -416,7 +431,6 @@ fn ray_handling(impact_effects: Res<ImpactEffects>, mut commands: Commands, mut 
                     Transform::from_translation(hit.point),
                 ));
             }
-            dir_y = 100.0 * dir_y.sin() - 15.0 * time.delta_secs();
         }
     }
     gizmos.linestrip_gradient(intersections);
@@ -430,7 +444,10 @@ fn botdead(player_data: Query<&mut Transform, With<Player>>, mut commands: Comma
         if botdata.health <= 0 {
             transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
             transform.translation.y = 0.5;
-            commands.entity(entity).remove::<BotData>();
+            commands.entity(entity)
+                .remove::<BotData>()
+                .insert(RigidBody::Static)
+                .remove::<Collider>();
             living_bots.0 -= 1;
         }
         if living_bots.0 == 0 {
@@ -551,7 +568,7 @@ fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResM
     }
 }
 
-fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, mut state: ResMut<NextState<AppState>>, mut commands: Commands, camera_query: Query<Entity, With<Camera3d>>) {
+fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>) {
     if mouse.just_pressed(MouseButton::Left) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
@@ -559,10 +576,6 @@ fn cursor_handling(mut cursor: Single<&mut CursorOptions, With<Window>>, keycode
     if keycode.just_pressed(KeyCode::Escape) {
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
-        for entity in camera_query.iter() {
-            commands.entity(entity).despawn();
-        }
-        state.set(AppState::MainMenu);
     }
 }
 
@@ -580,15 +593,17 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         GlobalTransform::default(),
         Player,
         RigidBody::Dynamic,
+        LinearDamping(2.0),
         SceneRoot(player_model),
         Collider::capsule(1.0, 0.5),
-        Transform::from_xyz(0.0, 10.0, 0.0),
+        Transform::from_xyz(0.0, 500.0, 0.0),
         PlayerData {
             health: 100,
-            player_name: "Admin".into(),
+            player_name: "None".into(),
             player_id: 1,
             jumps: 2,
-            jump_timer: Timer::from_seconds(1.0, TimerMode::Once)
+            jump_timer: Timer::from_seconds(1.0, TimerMode::Once),
+            footstep_timer: Timer::from_seconds(0.7, TimerMode::Repeating),
         },
         CharacterController {
             move_direction: Vec3::ZERO,
@@ -609,7 +624,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
         bot_offset: 0.0,
         hit_number: hits_num,
         fire_timer: Timer::from_seconds(1.0, TimerMode::Repeating),
-        footstep_timer: Timer::from_seconds(0.5, TimerMode::Repeating),
+        footstep_timer: Timer::from_seconds(0.6, TimerMode::Repeating),
     };
     commands.insert_resource(LivingBots(bot_number));
     for i in 0..bots.bot_quantity {
@@ -627,10 +642,10 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
                 bot_offset: i as f32 * 2.0 - (bots.bot_quantity as f32 - 1.0) * 2.0 / 2.0,
                 hit_number: hits_num,
                 fire_timer: Timer::from_seconds(rand::rng().random_range(1.5..2.0), TimerMode::Repeating),
-                footstep_timer: Timer::from_seconds(0.5, TimerMode::Repeating),
+                footstep_timer: Timer::from_seconds(0.7, TimerMode::Repeating),
             },
             IsBot,
-            Transform::from_xyz(bots.bot_offset, 10.0, -5.0),
+            Transform::from_xyz(bots.bot_offset, 500.0, -5.0),
             CharacterController {
                 move_direction: Vec3::ZERO,
             },
@@ -652,6 +667,7 @@ fn bot_handling(
     parents: Query<&ChildOf>,
     mut effects: ResMut<Assets<EffectAsset>>,
     bot_config: Res<BotConfig>,
+    audio: Res<Audio>,
 ) {
     let Ok((pt, mut pd)) = p.single_mut() else { return; };
     let pos: Vec<_> = q.iter().map(|(e, t, _, _, _)| (e, t.translation)).collect();
@@ -667,10 +683,11 @@ fn bot_handling(
             if f_dir.length_squared() > 0.0 {
                 t.rotation = t.rotation.slerp(Quat::from_rotation_y(f_dir.x.atan2(f_dir.z)), time.delta_secs() * 5.0);
                 if b.footstep_timer.tick(time.delta()).just_finished() {
+                    let footstep = audio.play(asset_server.load("Player/Footstep.ogg")).handle();
                     commands.spawn((
                         Transform::from_translation(t.translation),
                         SpatialAudioEmitter {
-                            instances: vec![asset_server.load("assets/Player/Footstep.ogg")]
+                            instances: vec![footstep]
                         }
                     ));
                 }
@@ -740,9 +757,33 @@ fn procedural_terrain(
     algorithm: Res<TerrainAlgorithm>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let mut heightmap = HeightMap::new(256, 256, 1.0);
-    FbmNoise::new(1337).generate(&mut heightmap);
+    let mut heightmap = HeightMap::new(1024, 1024, 1.0);
+    let mut noise = FbmNoise::new(1337);
+    noise.octaves = 6;
+    noise.lacunarity = 2.2;
+    noise.persistence = 0.45;
+    noise.base_frequency = 0.75;
+    noise.generate(&mut heightmap);
+    for val in heightmap.data_mut().iter_mut() {
+        *val = 1.0 - (*val * 2.0 - 1.0).abs();
+        *val = val.powi(2);
+    }
     heightmap.normalize();
+    let width = heightmap.width();
+    let height = heightmap.height();
+    let mut slope_data = vec![0.0; width * height];
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let h_right = heightmap.get(x + 1, y);
+            let h_left = heightmap.get(x - 1, y);
+            let h_up = heightmap.get(x, y + 1);
+            let h_down = heightmap.get(x, y - 1);
+            let dx = h_right - h_left;
+            let dy = h_up - h_down;
+            let slope = (dx * dx + dy * dy).sqrt();
+            slope_data[y * width + x] = slope.clamp(0.0, 1.0);
+        }
+    }
     let normal_algorithm = match *algorithm {
         TerrainAlgorithm::AreaWeighted => NormalMethod::AreaWeighted,
         TerrainAlgorithm::Sobel => NormalMethod::Sobel,
@@ -750,13 +791,17 @@ fn procedural_terrain(
     let collider = build_heightfield_collider(&heightmap);
     let mesh = HeightMapMeshBuilder::new()
         .with_normal_method(normal_algorithm)
-        .with_uv_tile_size(8.0)
+        .with_uv_tile_size(2.0)
         .build(&heightmap);
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial::default())),
-        Transform::from_xyz(-1024.0, 0.0, -1024.0).with_scale(Vec3::new(1.0, 50.0, 1.0)),
+        Transform::from_xyz(-512.0, 0.0, -512.0).with_scale(Vec3::new(1.0, 300.0, 1.0)),
+    ));
+    commands.spawn((
+        collider,
         RigidBody::Static,
+        Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::new(1.0, 300.0, 1.0)),
     ));
     let weight_map = SplatMapper::default().generate(&heightmap);
     let image = splat_to_image(&weight_map);
@@ -873,19 +918,15 @@ fn player_movement(asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: 
         let mut move_direction = Vec3::ZERO;
         if keyboard_input.pressed(KeyCode::KeyW) && player.health > 0 {
             move_direction.z += 1.0;
-            audio.play(asset_server.load("assets/Player/Footstep.ogg"));
         }
         if keyboard_input.pressed(KeyCode::KeyS) && player.health > 0 {
             move_direction.z -= 1.0;
-            audio.play(asset_server.load("assets/Player/Footstep.ogg"));
         }
         if keyboard_input.pressed(KeyCode::KeyA) && player.health > 0 {
             move_direction.x += 1.0;
-            audio.play(asset_server.load("assets/Player/Footstep.ogg"));
         }
         if keyboard_input.pressed(KeyCode::KeyD) && player.health > 0 {
             move_direction.x -= 1.0;
-            audio.play(asset_server.load("assets/Player/Footstep.ogg"));
         }
         if keyboard_input.just_pressed(KeyCode::Space) && player.health > 0 {
             if player.jumps > 0 {
@@ -896,6 +937,9 @@ fn player_movement(asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: 
                     spawner.reset();
                 }
             }
+        }
+        if move_direction != Vec3::ZERO && player.health > 0 && player.footstep_timer.tick(time.delta()).just_finished() {
+            audio.play(asset_server.load("Player/Footstep.ogg"));
         }
         for (_, light) in spawners.iter_mut() {
             if let Some(mut l) = light {
@@ -1010,7 +1054,6 @@ fn setup(
     let mut camera = commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
-        Bloom::NATURAL,
         Hdr,
         Msaa::Off,
         TemporalAntiAliasing::default(),
@@ -1024,6 +1067,7 @@ fn setup(
         ambient_color: Color::srgb(0.1, 0.1, 0.12),
         ambient_intensity: 0.1,
         step_count: 64,
+        jitter: 0.5,
         ..default()
     })
     .insert(Skybox {
@@ -1031,7 +1075,16 @@ fn setup(
         brightness: 1000.0,
         ..Default::default()
     })
-    .insert(SpatialAudioReceiver);
+    .insert(SpatialAudioReceiver)
+    .insert(Bloom {
+        intensity: 0.15,
+        low_frequency_boost: 0.5,
+        high_pass_frequency: 1.0,
+        ..Default::default()
+    })
+    .insert(Exposure {
+        ev100: 10.0,
+    });
     if graphics.enabled {
         camera.insert(ScreenSpaceAmbientOcclusion {
             quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra,
@@ -1041,8 +1094,21 @@ fn setup(
         .insert(EnvironmentMapLight {
             diffuse_map: sky.clone(),
             specular_map: sky.clone(),
-            intensity: 100.0,
+            intensity: 500.0,
             ..Default::default()
+        })
+        .insert(ScreenSpaceReflections::default())
+        .insert(MotionBlur {
+            shutter_angle: 0.5,
+            samples: 4,
+        })
+        .insert(DepthOfField {
+            mode: DepthOfFieldMode::Bokeh,
+            focal_distance: 8.0,
+            sensor_height: 0.024,
+            aperture_f_stops: 2.8,
+            max_circle_of_confusion_diameter: 64.0,
+            max_depth: 1000.0,
         });
     }
     commands.spawn(Node {
@@ -1385,18 +1451,33 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     )).id();
 }
 
-fn screen_shake(mut camera: Query<&mut Transform, With<Camera>>, mut commands: Commands, time: Res<Time>, mut shake: ResMut<ScreenShake>) {
+fn camera_effects(aim_distance: Res<AimDistance>, mut camera_dof_query: Query<&mut DepthOfField>, mut camera: Query<&mut Transform, With<Camera>>, mut timer: Local<f32>, player_q: Query<&LinearVelocity, With<Player>>, time: Res<Time>, mut shake: ResMut<ScreenShake>) {
+    let Ok(mut camera_transform) = camera.single_mut() else {
+        return;
+    };
+    let Ok(velocity) = player_q.single() else {
+        return;
+    };
+    if let Ok(mut dof) = camera_dof_query.single_mut() {
+        dof.focal_distance = aim_distance.0;
+    }
     if shake.strength > 0.01 {
-        if let Ok(mut transform) = camera.single_mut() {
-            transform.translation += Vec3::new(
-                rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
-                rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
-                rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
-            );
-        }
-            shake.strength *= 0.05_f32.powf(time.delta_secs());
+        camera_transform.translation += Vec3::new(
+            rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
+            rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
+            rand::rng().random_range(-shake.strength * 1.25..shake.strength * 1.25),
+        );
+        shake.strength *= 0.05_f32.powf(time.delta_secs());
     } else {
         shake.strength = 0.0;
+    }
+    let speed = Vec2::new(velocity.x, velocity.z).length();
+    if speed > 0.1 {
+        *timer += time.delta_secs() * 10.0;
+        camera_transform.translation.y += (*timer).sin() * 0.035;
+        camera_transform.translation.x += (*timer * 0.5).cos() * 0.018;
+    } else {
+        *timer *= 1.0 - time.delta_secs() * 8.0;
     }
 }
 
@@ -1423,12 +1504,13 @@ fn mesh_load_check(mut commands: Commands, mut events: MessageReader<AssetEvent<
 }
 
 fn shooting(
-    (impact_effects, timer, time, selected_weapon, mouse_button): (
+    (impact_effects, timer, time, selected_weapon, mouse_button, mut aim_distance): (
         Res<ImpactEffects>,
         ResMut<HitmarkerTimer>,
         Res<Time>,
         Res<SelectedWeapon>,
         Res<ButtonInput<MouseButton>>,
+        ResMut<AimDistance>,
     ),
     (mut shake, mut crosshair_spread, mut crosshair, window): (
         ResMut<ScreenShake>,
@@ -1446,6 +1528,8 @@ fn shooting(
     mut ray_cast: MeshRayCast,
     parent: Query<&ChildOf>,
     q: Query<&mut BackgroundColor, With<Hitmarker>>,
+    audio: Res<Audio>,
+    asset_server: Res<AssetServer>,
 ) {
     if *fire_cooldown > 0.0 {
         *fire_cooldown -= time.delta_secs();
@@ -1495,6 +1579,19 @@ fn shooting(
         3 => 0.20,
         _ => 0.4,
     };
+    let sound = match current_weapon {
+        1 => "Player/Pistol.ogg",
+        2 => "Player/Rifle.ogg",
+        3 => "Player/Rocket.ogg",
+        _ => "Player/Pistol.ogg",
+    };
+    let shot_sound = audio.play(asset_server.load(sound)).handle();
+    commands.spawn((
+        Transform::from_translation(player_transform.translation),
+        SpatialAudioEmitter {
+            instances: vec![shot_sound]
+        }
+    ));
     let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
     let (inner_camera, camera_transform) = camera.into_inner();
     let Ok(camera_ray) = inner_camera.viewport_to_world(camera_transform, in_screen_pos) else { return; };
@@ -1503,6 +1600,18 @@ fn shooting(
     } else {
         camera_ray.origin + *camera_ray.direction * max_range
     };
+    aim_distance.0 = (target - camera_transform.translation).length();
+    commands.spawn((
+        PointLight {
+            color: Color::srgb(1.0, 0.85, 0.4),
+            intensity: 50_000.0,
+            range: 8.0,
+            shadows_enabled: false,
+            ..default()
+        },
+        Transform::from_translation(ray_pos),
+        DespawnTimer(Timer::from_seconds(0.05, TimerMode::Once)),
+    ));
     crosshair.y -= 200.0;
     let forward = -player_transform.forward();
     let ray_pos = player_transform.translation + Vec3::new(0.0, 1.25, 0.0) + *forward * 2.25;
@@ -1515,7 +1624,7 @@ fn shooting(
         dir_vec.z += rand::rng().random_range(-total_spread..total_spread);
     }
     let dir = Dir3::new(dir_vec).unwrap_or(camera_ray.direction);
-    ray_handling(impact_effects, commands, timer, q, ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
+    ray_handling(audio, asset_server, current_weapon, impact_effects, commands, timer, q, ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
     for (mut spawner, mut transform, projectile) in shooting_effects.iter_mut() {
         if projectile.0 == current_weapon {
             transform.translation = ray_pos;
@@ -1614,7 +1723,7 @@ fn main_menu(
     }
 }
 
-fn settings_apply(mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, mut player_model: ResMut<PlayerModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
+fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, mut player_model: ResMut<PlayerModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
     for interaction in query.iter() {
         if *interaction == Interaction::Pressed {
             println!("Settings applied!");
@@ -1642,6 +1751,7 @@ fn settings_apply(mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<En
             for entity in q_main_menu.iter() {
                 commands.entity(entity).despawn();
             }
+            state.set(AppState::InGame);
             commands.spawn((
                 Node::default(),
                 NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
@@ -1712,6 +1822,7 @@ fn main() {
         .init_resource::<FloatingCrosshair>()
         .init_resource::<SelectedWeapon>()
         .init_resource::<BotConfig>()
+        .init_resource::<AimDistance>()
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
         .insert_resource(Hitmarker)
@@ -1725,7 +1836,7 @@ fn main() {
             model_name: "Player/Player.glb".to_string()
         })
         .add_plugins(PhysicsPlugins::default())
-        .insert_resource(Gravity(Vec3::new(0.0, -25.0, 0.0))) 
+        .insert_resource(Gravity(Vec3::new(0.0, -14.0, 0.0))) 
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
         .add_systems(Update, (main_menu, cycle_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
@@ -1758,7 +1869,7 @@ fn main() {
                 weapon_selector,
                 crosshair_spread,
                 hitmarker,
-                screen_shake.after(camera_positioning),
+                camera_effects.after(camera_positioning),
             ).run_if(in_state(AppState::InGame)),
         )
         .run();

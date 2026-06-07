@@ -11,7 +11,7 @@ bevy_ecs = "0.18.1"
 bevy_embedded_assets = "0.15.0"
 bevy_flair = "0.7.0"
 bevy_hanabi = "0.18.0"
-bevy_kira_audio = { version = "0.25.0", features = ["mp3"] }
+bevy_kira_audio = { version = "0.25.0", features = ["ogg"] }
 bevy_symbios_ground = { version = "0.3.0", features = ["physics"] }
 include_dir = "0.7.4"
 log = { version = "0.4.32", features = ["max_level_debug", "release_max_level_warn"] }
