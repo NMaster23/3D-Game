@@ -1,18 +1,16 @@
-use bevy::{anti_alias::taa::TemporalAntiAliasing, app::AppExit, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel}, post_process::{bloom::Bloom, dof::DepthOfFieldMode}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{anti_alias::taa::TemporalAntiAliasing, app::AppExit, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{motion_blur::MotionBlur, bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 use std::f32::consts::PI;
 use bevy_hanabi::prelude::*;
+use bevy_hanabi::AlphaMode;
 use bevy_flair::prelude::*;
 use bevy_kira_audio::prelude::*;
 use bevy_symbios_ground::{
     FbmNoise, GroundMaterialSettings, HeightMap, HeightMapMeshBuilder, NormalMethod, TerrainGenerator, build_heightfield_collider, splat_to_image, SplatMapper, SplatTexture,
 };
-use bevy::core_pipeline::dof::DepthOfField;
-use bevy::core_pipeline::motion_blur::MotionBlur;
-use bevy::pbr::ScreenSpaceReflections;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -67,6 +65,9 @@ struct BottomThrusterLeft;
 
 #[derive(Component)]
 struct BottomThrusterRight;
+
+#[derive(Component)]
+struct DashThruster
 
 #[derive(Resource, Default)]
 struct TerrainGen {
@@ -311,7 +312,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     let spark_effect = effects.add(
         EffectAsset::new(1000, SpawnerSettings::once(1000.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
+            .with_alpha_mode(AlphaMode::Add)
             .init(init_pos)
             .init(init_life)
             .init(init_vel)
@@ -356,7 +357,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     let arc_effect = effects.add(
         EffectAsset::new(2000, SpawnerSettings::once(2000.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
+            .with_alpha_mode(AlphaMode::Add)
             .init(init_pos_arc)
             .init(init_life_arc)
             .init(init_vel_arc)
@@ -1160,7 +1161,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let smoke_effect = effects.add(
         EffectAsset::new(32000, SpawnerSettings::once(150.0.into()), smoke_module)
             .with_simulation_space(SimulationSpace::Global)
-            .with_alpha_mode(bevy_hanabi::AlphaMode::Blend)
+            .with_alpha_mode(AlphaMode::Blend)
             .init(SetPositionSphereModifier {
                 center: smoke_pos_center,
                 radius: smoke_pos_radius,
@@ -1203,7 +1204,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let flame_effect = effects.add(
         EffectAsset::new(16000, SpawnerSettings::once(150.0.into()), flame_module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
+            .with_alpha_mode(AlphaMode::Add)
             .init(SetPositionSphereModifier {
                 center: flame_pos_center,
                 radius: flame_pos_radius,
@@ -1226,6 +1227,50 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         )
     );
 
+    let mut writer_dash = ExprWriter::new();
+    let mut color_dash = bevy_hanabi::Gradient::new();
+    // HDR Cyan/Blue fading to dark smoke
+    color_dash.add_key(0.0, Vec4::new(0.0, 8.0, 10.0, 1.0)); 
+    color_dash.add_key(0.2, Vec4::new(0.0, 1.0, 4.0, 0.8));
+    color_dash.add_key(1.0, Vec4::new(0.05, 0.05, 0.05, 0.0));
+
+    let mut size_dash = bevy_hanabi::Gradient::new();
+    size_dash.add_key(0.0, Vec3::splat(0.8));
+    size_dash.add_key(1.0, Vec3::splat(0.0));
+
+    let dash_module = writer_dash.finish();
+    let dash_effect = effects.add(
+        EffectAsset::new(4000, SpawnerSettings::once(500.0.into()), dash_module) // 500 particles instantly
+            .with_simulation_space(SimulationSpace::Global)
+            .with_alpha_mode(AlphaMode::Add)
+            .init(SetPositionSphereModifier {
+                center: writer_dash.lit(Vec3::ZERO).expr(),
+                radius: writer_dash.lit(0.5).expr(),
+                dimension: ShapeDimension::Volume,
+            })
+            .init(SetVelocitySphereModifier {
+                center: writer_dash.lit(Vec3::ZERO).expr(),
+                speed: writer_dash.lit(40.0).expr(), // Explosive outward speed
+            })
+            .init(SetAttributeModifier::new(Attribute::LIFETIME, writer_dash.lit(0.4).expr()))
+            .update(LinearDragModifier::new(writer_dash.lit(8.0).expr())) // High drag stops them quickly
+            .render(ColorOverLifetimeModifier {
+                gradient: color_dash,
+                ..Default::default()
+            })
+            .render(SizeOverLifetimeModifier {
+                gradient: size_dash,
+                screen_space_size: false,
+                ..Default::default()
+            })
+    );
+    let dash_thruster = commands.spawn((
+        Name::new("Dash Thruster"),
+        ParticleEffect::new(dash_effect),
+        EffectSpawner::default(), // Defaults to inactive/waiting
+        Transform::from_xyz(0.0, 0.0, 0.0), 
+        DashThruster,
+    )).id();
     let left_thruster_smoke = commands.spawn((
         Name::new("Left Thruster Smoke"),
         ParticleEffect::new(smoke_effect.clone()),
@@ -1291,7 +1336,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         dimension: ShapeDimension::Surface, 
     };
     let init_vel = SetVelocitySphereModifier {
-        center: module.lit(Vec3::new(0.0, 0.0, -1.0)),
+        center: module.lit(Vec3::new(0.0, 0.0, 1.0)),
         speed: module.lit(15.0),
     };
     let lifetime = module.lit(1.5);
@@ -1300,8 +1345,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     let projectile_effect_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
-            .with_simulation_space(SimulationSpace::Global)
-            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
+            .with_simulation_space(SimulationSpace::Local)
+            .with_alpha_mode(AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
@@ -1349,7 +1394,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         dimension: ShapeDimension::Surface, 
     };
     let init_vel = SetVelocitySphereModifier {
-        center: module.lit(Vec3::new(0.0, 0.0, -1.0)),
+        center: module.lit(Vec3::new(0.0, 0.0, 1.0)),
         speed: module.lit(80.0),
     };
     let lifetime = module.lit(1.5);
@@ -1358,8 +1403,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let init_color = SetAttributeModifier::new(Attribute::COLOR, module.lit(0xFFFFFFFFu32));
     let projectile_effect_2_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
-            .with_simulation_space(SimulationSpace::Global)
-            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
+            .with_simulation_space(SimulationSpace::Local)
+            .with_alpha_mode(AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
@@ -1410,7 +1455,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         dimension: ShapeDimension::Volume,
     };
     let init_vel = SetVelocitySphereModifier {
-        center: module.lit(Vec3::new(0.0, 0.0, -1.0)),
+        center: module.lit(Vec3::new(0.0, 0.0, 1.0)),
         speed: module.lit(20.0),
     };
     let lifetime = module.lit(2.5);
@@ -1420,8 +1465,8 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     
     let projectile_effect_3_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(800.0.into()), module)
-            .with_simulation_space(SimulationSpace::Global)
-            .with_alpha_mode(bevy_hanabi::AlphaMode::Blend) 
+            .with_simulation_space(SimulationSpace::Local)
+            .with_alpha_mode(AlphaMode::Blend) 
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
@@ -1600,7 +1645,9 @@ fn shooting(
     } else {
         camera_ray.origin + *camera_ray.direction * max_range
     };
-    aim_distance.0 = (target - camera_transform.translation).length();
+    aim_distance.0 = (target - camera_transform.translation()).length();
+    let forward = -player_transform.forward();
+    let ray_pos = player_transform.translation + Vec3::new(0.0, 1.25, 0.0) + *forward * 2.25;
     commands.spawn((
         PointLight {
             color: Color::srgb(1.0, 0.85, 0.4),
@@ -1613,8 +1660,6 @@ fn shooting(
         DespawnTimer(Timer::from_seconds(0.05, TimerMode::Once)),
     ));
     crosshair.y -= 200.0;
-    let forward = -player_transform.forward();
-    let ray_pos = player_transform.translation + Vec3::new(0.0, 1.25, 0.0) + *forward * 2.25;
     let total_spread = base_spread + (crosshair_spread.spread * 0.2);
     let mut dir_vec = (target - ray_pos).normalize_or_zero();
     if dir_vec == Vec3::ZERO { dir_vec = *camera_ray.direction; }
@@ -1752,19 +1797,6 @@ fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<
                 commands.entity(entity).despawn();
             }
             state.set(AppState::InGame);
-            commands.spawn((
-                Node::default(),
-                NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
-                MainMenuUi,
-                children![
-                    (Node::default(), Name::new("game_menu"), children![
-                        (Text::new("Mech Game".to_string()), Name::new("menu_title"), Node::default()),
-                        (Button, StartButton, Node::default(), children![(Text::new("Start"), Node::default())]),
-                        (Button, SettingsButton, Node::default(), children![(Text::new("Settings"), Node::default())]),
-                        (Node::default(), Name::new("floating_borders"))
-                    ]),
-                ],
-            ));
         }
     }
 }
