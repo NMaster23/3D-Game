@@ -236,6 +236,12 @@ struct CameraDashEffect {
     active_multiplier: f32,
 }
 
+#[derive(Component)]
+struct PrevOptionButton;
+
+#[derive(Component)]
+struct NextOptionButton;
+
 #[derive(Resource, Clone, Copy, PartialEq)]
 pub enum TerrainAlgorithm {
     AreaWeighted,
@@ -524,12 +530,12 @@ fn sprint_bar(mut commands: Commands, mut materials: ResMut<Assets<SprintBarUI>>
             color: LinearRgba::new(0.2, 0.6, 1.0, 1.0), // Blue sprint bar
         })),
         Node {
-            width: Val::Px(1000.0),
-            height: Val::Px(1000.0),
+            width: Val::Px(300.0),
+            height: Val::Px(40.0),
             position_type: PositionType::Absolute,
-            top: Val::Px(20.0),
+            top: Val::Px(10.0),
             left: Val::Percent(50.0),
-            margin: UiRect::left(Val::Px(-500.0)),
+            margin: UiRect::left(Val::Px(-150.0)),
             ..Default::default()
         },
         SprintBarUI {
@@ -1810,12 +1816,32 @@ fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
     ));
 }
 
-fn cycle_menu(keycode: Res<ButtonInput<KeyCode>>, mut menu: ResMut<CycleMenu>, mut query: Query<&mut Text, With<CycleTextTarget>>) {
+fn cycle_menu(
+    keycode: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<CycleMenu>,
+    mut query: Query<&mut Text, With<CycleTextTarget>>,
+    q_prev: Query<&Interaction, (Changed<Interaction>, With<PrevOptionButton>)>,
+    q_next: Query<&Interaction, (Changed<Interaction>, With<NextOptionButton>)>,
+) {
     let mut changed = false;
-    if keycode.just_pressed(KeyCode::ArrowRight) {
+    let mut right_pressed = keycode.just_pressed(KeyCode::ArrowRight);
+    let mut left_pressed = keycode.just_pressed(KeyCode::ArrowLeft);
+
+    for interaction in q_next.iter() {
+        if *interaction == Interaction::Pressed {
+            right_pressed = true;
+        }
+    }
+    for interaction in q_prev.iter() {
+        if *interaction == Interaction::Pressed {
+            left_pressed = true;
+        }
+    }
+
+    if right_pressed {
         menu.index = (menu.index + 1) % menu.options.len();
         changed = true;
-    } else if keycode.just_pressed(KeyCode::ArrowLeft) {
+    } else if left_pressed {
         if menu.index == 0 {
             menu.index = menu.options.len() - 1;
         } else {
@@ -1830,7 +1856,7 @@ fn cycle_menu(keycode: Res<ButtonInput<KeyCode>>, mut menu: ResMut<CycleMenu>, m
     }
 }
 
-fn main_menu(
+fn settings_menu(
     mut state: ResMut<NextState<AppState>>,
     q_start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
     q_settings: Query<&Interaction, (Changed<Interaction>, With<SettingsButton>)>,
@@ -1856,12 +1882,11 @@ fn main_menu(
                 NodeStyleSheet::new(asset_server.load("menu/settings.css")),
                 MainMenuUi,
                 children![
-                    (
-                        Text::new(menu.options[menu.index].clone()), 
-                        Name::new("cycle_text"),
-                        CycleTextTarget,
-                        Node::default()
-                    ),
+                    (Node { flex_direction: FlexDirection::Row, ..default() }, Name::new("cycle_container"), children![
+                        (Button, PrevOptionButton, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
+                        (Text::new(menu.options[menu.index].clone()), Name::new("cycle_text"), CycleTextTarget, Node::default()),
+                        (Button, NextOptionButton, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
+                    ]),
                     (Button, Name::new("apply_button"), ApplySettingsButton, Node::default(), children![(Text::new("Apply"), Node::default())]),
                 ],
             ));
@@ -1978,7 +2003,7 @@ fn main() {
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -14.0, 0.0))) 
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
-        .add_systems(Update, (main_menu, cycle_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
+        .add_systems(Update, (settings_menu, cycle_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
         .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, sprint_bar, weapon_selector_setup, procedural_terrain))
