@@ -524,27 +524,15 @@ fn game_over(mut commands: Commands, asset_server: Res<AssetServer>, mut cursor:
     cursor.visible = true;
     let game_over: Handle<Image> = asset_server.load("GameOver.png");
     commands.spawn((
-        Node {
-            width: Val::Percent(100.0),
-            min_height: Val::Percent(100.0),
-            margin: UiRect::bottom(Val::Px(50.0)),
-            ..Default::default()
-        },
-        (
-            Button,
-            RestartButton,
-            Node {
-                width: Val::Px(200.0),
-                height: Val::Px(100.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..Default::default()
-            },
-            BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
-            children![
-                (Text::new("Play Again"), Node::default())
-            ]
-        )
+        Node::default(),
+        NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
+        children![
+            (Node::default(), Name::new("game_menu"), children![
+                (ImageNode::new(game_over), Node::default()),
+                (Button, RestartButton, Node::default(), children![(Text::new("Play Again"), Node::default())]),
+                (Node::default(), Name::new("floating_borders"))
+            ]),
+        ]
     ));
 }
 
