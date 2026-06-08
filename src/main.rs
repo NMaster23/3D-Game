@@ -428,47 +428,46 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     });
 }
 
-fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapon: u32, impact_effects: Res<ImpactEffects>, mut commands: Commands, mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, mut ray_cast: MeshRayCast, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>) {
+fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapon: u32, impact_effects: Res<ImpactEffects>, mut commands: Commands, mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, spatial_query: SpatialQuery, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>, shooter_entity: Entity) {
     let mut ray = Ray3d::new(ray_pos, ray_dir);
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
     let color = Color::from(css::RED);
     let mut total_length = 0.0;
     for i in 0..MAX_BOUNCES {
-        let Some((entity, hit)) = ray_cast
-            .cast_ray(ray, &MeshRayCastSettings::default())
-            .first()
-        else {
+        let Some(hit) = spatial_query.cast_ray(
+            ray.origin, 
+            ray.direction, 
+            max_range, // The maximum distance you want the ray to travel
+            true,      // Treat colliders as solid
+            &SpatialQueryFilter::from_excluded_entities([shooter_entity]) // Or SpatialQueryFilter::from_excluded_entities([shooter_entity])
+        ) else {
             break;
         };
         total_length += hit.distance;
         if total_length > max_range {
             break;
         }
+        let hit_point = ray.origin + *ray.direction * hit.distance;
         let brightness = 1.0 + 10.0 * (1.0 - i as f32 / MAX_BOUNCES as f32);
-        intersections.push((hit.point, color.mix(&color, brightness)));
+        intersections.push((hit_point, color.mix(&color, brightness)));
         ray.direction = Dir3::new(ray.direction.reflect(hit.normal)).unwrap();
-        ray.origin = hit.point + ray.direction * 1e-6;
-        let mut current_entity = *entity;
+        ray.origin = hit_point + ray.direction * 1e-6;
+        let mut current_entity = hit.entity;
         loop {
-            if let Ok(parent) = parents.get(current_entity) {
-                current_entity = parent.0;
-            } else {
-                break;
-            }
             if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
                 let final_damage = (damage as f32 * (1.0 - total_length / max_range)).max(1.0) as i32;
                 bot_data.health -= final_damage;
                 commands.spawn((
                     Text2d::new(format!("-{}", final_damage)),
-                    Transform::from_translation(hit.point + Vec3::Y * 2.5),
+                    Transform::from_translation(hit_point + Vec3::Y * 2.5),
                     DespawnTimer(Timer::from_seconds(1.0, TimerMode::Once)),
                 ));
                 timer.0.reset();
                 if current_weapon == 2 {
                     let shot_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).handle();
                     commands.spawn((
-                        Transform::from_translation(hit.point),
+                        Transform::from_translation(hit_point),
                         SpatialAudioEmitter {
                             instances: vec![shot_sound]
                         },
@@ -481,12 +480,18 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
                 }
                 commands.spawn((
                     ParticleEffect::new(impact_effects.spark_effect.clone()),
-                    Transform::from_translation(hit.point),
+                    Transform::from_translation(hit_point),
                 ));
                 commands.spawn((
                     ParticleEffect::new(impact_effects.arc_effect.clone()),
-                    Transform::from_translation(hit.point),
+                    Transform::from_translation(hit_point),
                 ));
+                break;
+            }
+            if let Ok(parent) = parents.get(current_entity) {
+                current_entity = parent.0;
+            } else {
+                break;
             }
         }
     }
@@ -787,13 +792,12 @@ fn bot_handling(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ProjectileFlash>>,
-    mut ray_cast: MeshRayCast,
+    mut spatial_query: SpatialQuery,
     mut gizmos: Gizmos,
     mut q: Query<(Entity, &mut Transform, &mut CharacterController, &mut BotData, &mut LinearVelocity), (With<Bots>, Without<Player>)>,
     mut p: Query<(&Transform, &mut PlayerData), With<Player>>,
     p_entity: Query<Entity, With<Player>>,
     parents: Query<&ChildOf>,
-    mut effects: ResMut<Assets<EffectAsset>>,
     bot_config: Res<BotConfig>,
     audio: Res<Audio>,
 ) {
@@ -829,11 +833,19 @@ fn bot_handling(
                 let max_range = 100.0;
                 let ray_dir = Dir3::new(pt.translation - t.translation).unwrap_or(Dir3::Z);
                 let ray = Ray3d::new(t.translation + Vec3::new(0.0, 1.25, 0.0), ray_dir);
-                let hits = ray_cast.cast_ray(ray, &MeshRayCastSettings::default());
+                let Some(hits) = spatial_query.cast_ray(
+                    ray.origin, 
+                    ray.direction, 
+                    max_range, // The maximum distance you want the ray to travel
+                    true,      // Treat colliders as solid
+                    &SpatialQueryFilter::default() // Or SpatialQueryFilter::from_excluded_entities([shooter_entity])
+                ) else {
+                    break;
+                };
                 let hit_number = 1;
                 let hit_chance = rand::rng().random_range(bot_config.accuracy_range.clone());
                 if hit_number == hit_chance {
-                    for (hit_entity, hit_data) in hits {
+                    let (hit_entity, hit_data) = (hits.entity, hits); {
                         total_length += hit_data.distance;
                         if total_length > max_range {
                             break;
@@ -841,7 +853,7 @@ fn bot_handling(
                         if hit_data.distance > 30.0 {
                             break;
                         }
-                        let mut current_entity = *hit_entity;
+                        let mut current_entity = hit_entity;
                         let mut hit_self = false;
                         let mut hit_player = false;
                         loop {
@@ -862,7 +874,8 @@ fn bot_handling(
                             continue;
                         }
                         if hit_player {
-                            gizmos.line(t.translation, hit_data.point, Color::srgb(1.0, 0.0, 0.0));
+                            let hit_point = ray.origin + *ray.direction * hit_data.distance;
+                            gizmos.line(t.translation, hit_point, Color::srgb(1.0, 0.0, 0.0));
                             let damage = (15.0 * (1.0 - total_length / max_range)).max(1.0) as i32;
                             pd.health -= damage;
                             println!("Player hit! Health: {}, Distance: {:.2}", pd.health, hit_data.distance);
@@ -1736,10 +1749,10 @@ fn shooting(
     mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &ProjectileFlashEffect), (Without<Player>, Without<Camera3d>)>,
     mut fire_cooldown: Local<f32>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
-    mut player_query: Query<&mut Transform, With<Player>>,
+    mut player_query: Query<(Entity, &mut Transform), With<Player>>,
     mut gizmos: Gizmos,
     query: Query<&mut BotData>,
-    mut ray_cast: MeshRayCast,
+    spatial_query: SpatialQuery,
     parent: Query<&ChildOf>,
     q: Query<&mut BackgroundColor, With<Hitmarker>>,
     audio: Res<Audio>,
@@ -1752,7 +1765,7 @@ fn shooting(
     if *fire_cooldown > 0.0 {
         return;
     }
-    let Ok(player_transform) = player_query.single_mut() else {
+    let Ok((shooter_entity, player_transform)) = player_query.single_mut() else {
         return;
     };
     let current_weapon = selected_weapon.id;
@@ -1810,8 +1823,14 @@ fn shooting(
     let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
     let (inner_camera, camera_transform) = camera.into_inner();
     let Ok(camera_ray) = inner_camera.viewport_to_world(camera_transform, in_screen_pos) else { return; };
-    let target = if let Some((_, hit)) = ray_cast.cast_ray(camera_ray, &MeshRayCastSettings::default()).first() {
-        hit.point
+    let target = if let Some(hit) = spatial_query.cast_ray(
+        camera_ray.origin, 
+        camera_ray.direction, 
+        max_range, 
+        true, 
+        &SpatialQueryFilter::from_excluded_entities([shooter_entity]) // Don't shoot yourself!
+    ) {
+        camera_ray.origin + *camera_ray.direction * hit.distance
     } else {
         camera_ray.origin + *camera_ray.direction * max_range
     };
@@ -1839,7 +1858,7 @@ fn shooting(
         dir_vec.z += rand::rng().random_range(-total_spread..total_spread);
     }
     let dir = Dir3::new(dir_vec).unwrap_or(camera_ray.direction);
-    ray_handling(audio, asset_server, current_weapon, impact_effects, commands, timer, q, ray_pos, dir, damage, max_range, time, ray_cast, &mut gizmos, query, parent);
+    ray_handling(audio, asset_server, current_weapon, impact_effects, commands, timer, q, ray_pos, dir, damage, max_range, time, spatial_query, &mut gizmos, query, parent, shooter_entity);
     for (mut spawner, mut transform, projectile) in shooting_effects.iter_mut() {
         if projectile.0 == current_weapon {
             transform.translation = ray_pos;
