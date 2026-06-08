@@ -1,4 +1,4 @@
-use bevy::{anti_alias::taa::TemporalAntiAliasing, app::AppExit, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, math::VectorSpace, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog, VolumetricLight}, math::VectorSpace, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::AsBindGroup, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -28,6 +28,14 @@ pub struct JumpIndicator {
 
 #[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
 pub struct HealthBarUI {
+    #[uniform(0)]
+    pub progress: f32,
+    #[uniform(0)]
+    pub color: LinearRgba,
+}
+
+#[derive(AsBindGroup, Asset, TypePath, Debug, Clone, Component)]
+pub struct SprintBarUI {
     #[uniform(0)]
     pub progress: f32,
     #[uniform(0)]
@@ -255,6 +263,12 @@ impl UiMaterial for HealthBarUI {
     }
 }
 
+impl UiMaterial for SprintBarUI {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/sprint_bar.wgsl".into() // Reuse the health bar shader for our sprint bar
+    }
+}
+
 impl UiMaterial for WeaponSelectorUI {
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/weapon_selector.wgsl".into()
@@ -477,6 +491,7 @@ fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndic
             right: Val::Px(30.0),
             ..Default::default()
         },
+        ZIndex(10),
     ));
 }
 
@@ -498,6 +513,30 @@ fn health_bar(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>
             progress: 1.0,
             color: LinearRgba::new(0.2, 0.8, 0.2, 1.0),
         },
+        ZIndex(10),
+    ));
+}
+
+fn sprint_bar(mut commands: Commands, mut materials: ResMut<Assets<SprintBarUI>>) {
+    commands.spawn((
+        MaterialNode(materials.add(SprintBarUI {
+            progress: 1.0,
+            color: LinearRgba::new(0.2, 0.6, 1.0, 1.0), // Blue sprint bar
+        })),
+        Node {
+            width: Val::Px(1000.0),
+            height: Val::Px(1000.0),
+            position_type: PositionType::Absolute,
+            top: Val::Px(20.0),
+            left: Val::Percent(50.0),
+            margin: UiRect::left(Val::Px(-500.0)),
+            ..Default::default()
+        },
+        SprintBarUI {
+            progress: 1.0,
+            color: LinearRgba::new(0.2, 0.6, 1.0, 1.0),
+        },
+        ZIndex(10),
     ));
 }
 
@@ -509,6 +548,15 @@ fn health_bar_handling(mut commands: Commands, mut materials: ResMut<Assets<Heal
             let red = ((1.0 - progress) * 2.0).clamp(0.0, 1.0);
             let green = progress;
             material.color = LinearRgba::new(red, green, 0.1, 1.0);
+        }
+    }
+}
+
+fn sprint_bar_handling(mut materials: ResMut<Assets<SprintBarUI>>, query: Query<&PlayerData, With<Player>>) {
+    if let Ok(player) = query.single() {
+        for (_, material) in materials.iter_mut() {
+            material.progress = player.dash_timer.fraction();
+            material.color = LinearRgba::new(0.1, 0.6, 1.0, 1.0); // Light blue
         }
     }
 }
@@ -547,6 +595,7 @@ fn weapon_selector_setup(mut commands: Commands, mut materials: ResMut<Assets<We
             ..Default::default()
         },
         ui_material,
+        ZIndex(10),
     ));
 }
 
@@ -611,7 +660,11 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
             jumps: 2,
             jump_timer: Timer::from_seconds(1.0, TimerMode::Once),
             footstep_timer: Timer::from_seconds(0.7, TimerMode::Repeating),
-            dash_timer: Timer::from_seconds(2.0, TimerMode::Repeating),
+            dash_timer: {
+                let mut timer = Timer::from_seconds(2.0, TimerMode::Once);
+                timer.set_elapsed(Duration::from_secs(2));
+                timer
+            },
         },
         CharacterController {
             move_direction: Vec3::ZERO,
@@ -803,7 +856,12 @@ fn procedural_terrain(
         .build(&heightmap);
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(materials.add(StandardMaterial::default())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.25, 0.28, 0.22), // A natural, dark earthy tone
+            perceptual_roughness: 0.85, // High roughness so it doesn't look wet/shiny
+            reflectance: 0.1, // Low reflectance
+            ..default()
+        })),
         Transform::from_xyz(-512.0, 0.0, -512.0).with_scale(Vec3::new(1.0, 300.0, 1.0)),
     ));
     commands.spawn((
@@ -912,7 +970,7 @@ fn movement_animations(
     }
 }
 
-fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashEffect>, mut screen_shake: ResMut<ScreenShake>, mut dash_spawners: Query<&mut EffectSpawner, With<DashThruster>>, asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
+fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashEffect>, mut screen_shake: ResMut<ScreenShake>, mut dash_spawners: Query<&mut EffectSpawner, With<DashThruster>>, asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<DashThruster>)>) {
     for (transform, mut linear_velocity, mut player, mut controller) in query.iter_mut() {
         player.dash_timer.tick(time.delta());
         if player.jumps < 2 {
@@ -960,13 +1018,17 @@ fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashE
             }
         }
         let mut velocity = (transform.rotation * move_direction).normalize_or_zero() * 5.0;
-        if keyboard_input.just_pressed(KeyCode::ShiftLeft) && player.dash_timer.just_finished() && player.health > 0 {
+        
+        let is_dashing = player.dash_timer.elapsed_secs() < 0.2;
+        
+        if keyboard_input.just_pressed(KeyCode::ShiftLeft) && player.dash_timer.is_finished() && player.health > 0 {
             let dash_power = 45.0;
             if move_direction == Vec3::ZERO {
                 move_direction.z = 1.0;
             }
-            velocity.x = move_direction.x * dash_power;
-            velocity.z = move_direction.z * dash_power;
+            let dash_velocity = (transform.rotation * move_direction).normalize_or_zero() * dash_power;
+            linear_velocity.x = dash_velocity.x;
+            linear_velocity.z = dash_velocity.z;
             let dash_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).handle();
             commands.spawn((
                 Transform::from_translation(transform.translation),
@@ -979,9 +1041,10 @@ fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashE
                 spawner.reset();
             }
             player.dash_timer.reset();
+        } else if !is_dashing {
+            linear_velocity.x = velocity.x;
+            linear_velocity.z = velocity.z;
         }
-        linear_velocity.x = velocity.x;
-        linear_velocity.z = velocity.z;
 
         controller.move_direction = (linear_velocity.x, 0.0, linear_velocity.z).into();
     }
@@ -1091,39 +1154,35 @@ fn setup(
         NormalPrepass,
         MotionVectorPrepass,
     ));
-    camera.insert(VolumetricFog {
+    camera.insert((
+        VolumetricFog {
         ambient_color: Color::srgb(0.1, 0.1, 0.12),
         ambient_intensity: 0.1,
         step_count: 64,
         jitter: 0.5,
         ..default()
-    })
-    .insert(Skybox {
+        },
+        Skybox {
         image: sky.clone(),
-        brightness: 1000.0,
+        brightness: 350.0,
         ..Default::default()
-    })
-    .insert(SpatialAudioReceiver)
-    .insert(Bloom {
+        },
+        SpatialAudioReceiver,
+        Bloom {
         intensity: 0.15,
         low_frequency_boost: 0.5,
         high_pass_frequency: 1.0,
         ..Default::default()
-    })
-    .insert(Exposure {
+        },
+        Exposure {
         ev100: 10.0,
-    });
+        },
+    ));
     if graphics.enabled {
         camera.insert(ScreenSpaceAmbientOcclusion {
             quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra,
             constant_object_thickness: 0.2,
             ..default()
-        })
-        .insert(EnvironmentMapLight {
-            diffuse_map: sky.clone(),
-            specular_map: sky.clone(),
-            intensity: 500.0,
-            ..Default::default()
         })
         .insert(ScreenSpaceReflections::default())
         .insert(MotionBlur {
@@ -1149,7 +1208,7 @@ fn setup(
     });
     commands.spawn((
         DirectionalLight {
-            illuminance: 15000.0,
+            illuminance: 100_000.0,
             shadows_enabled: true,
             ..default()
         },
@@ -1885,6 +1944,7 @@ fn main() {
         .add_plugins(bevy_kira_audio::SpatialAudioPlugin)
         .add_plugins(UiMaterialPlugin::<JumpIndicator>::default())
         .add_plugins(UiMaterialPlugin::<HealthBarUI>::default())
+        .add_plugins(UiMaterialPlugin::<SprintBarUI>::default())
         .add_plugins(UiMaterialPlugin::<WeaponSelectorUI>::default())
         .add_plugins(HanabiPlugin)
         .add_plugins(FlairPlugin)
@@ -1910,13 +1970,18 @@ fn main() {
         .insert_resource(PlayerModel {
             model_name: "Player/Player.glb".to_string()
         })
+        .insert_resource(GlobalAmbientLight {
+            color: Color::WHITE,
+            brightness: 10.0, // increase ambient light
+            ..default()
+        })
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -14.0, 0.0))) 
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
         .add_systems(Update, (main_menu, cycle_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
-        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, weapon_selector_setup, procedural_terrain))
+        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, sprint_bar, weapon_selector_setup, procedural_terrain))
         .add_systems(
             Update,
             (
@@ -1930,6 +1995,7 @@ fn main() {
                 shooting,
                 jump_indicator_handling,
                 health_bar_handling,
+                sprint_bar_handling,
                 despawn_ray,
                 targeting_disruptor,
                 player_death,
