@@ -1,4 +1,4 @@
-use bevy::{anti_alias::taa::TemporalAntiAliasing, app::AppExit, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{motion_blur::MotionBlur, bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{anti_alias::taa::TemporalAntiAliasing, app::AppExit, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, image::ImageLoaderSettings, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight}, math::VectorSpace, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension}, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, state::commands, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -67,7 +67,7 @@ struct BottomThrusterLeft;
 struct BottomThrusterRight;
 
 #[derive(Component)]
-struct DashThruster
+struct DashThruster;
 
 #[derive(Resource, Default)]
 struct TerrainGen {
@@ -105,6 +105,7 @@ pub struct PlayerData {
     jumps: u32,
     jump_timer: Timer,
     footstep_timer: Timer,
+    dash_timer: Timer,
 }
 
 #[derive(Asset, TypePath, Debug, Clone)]
@@ -221,6 +222,11 @@ struct SsaoEnabled {
 
 #[derive(Resource, Default)]
 struct AimDistance(f32);
+
+#[derive(Resource)]
+struct CameraDashEffect {
+    active_multiplier: f32,
+}
 
 #[derive(Resource, Clone, Copy, PartialEq)]
 pub enum TerrainAlgorithm {
@@ -605,6 +611,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
             jumps: 2,
             jump_timer: Timer::from_seconds(1.0, TimerMode::Once),
             footstep_timer: Timer::from_seconds(0.7, TimerMode::Repeating),
+            dash_timer: Timer::from_seconds(2.0, TimerMode::Repeating),
         },
         CharacterController {
             move_direction: Vec3::ZERO,
@@ -905,8 +912,9 @@ fn movement_animations(
     }
 }
 
-fn player_movement(asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
+fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashEffect>, mut screen_shake: ResMut<ScreenShake>, mut dash_spawners: Query<&mut EffectSpawner, With<DashThruster>>, asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>>) {
     for (transform, mut linear_velocity, mut player, mut controller) in query.iter_mut() {
+        player.dash_timer.tick(time.delta());
         if player.jumps < 2 {
             player.jump_timer.tick(time.delta());
             if player.jump_timer.just_finished() {
@@ -939,7 +947,7 @@ fn player_movement(asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: 
                 }
             }
         }
-        if move_direction != Vec3::ZERO && player.health > 0 && player.footstep_timer.tick(time.delta()).just_finished() {
+        if move_direction != Vec3::ZERO && player.health > 0 && player.footstep_timer.tick(time.delta()).is_finished() {
             audio.play(asset_server.load("Player/Footstep.ogg"));
         }
         for (_, light) in spawners.iter_mut() {
@@ -951,8 +959,27 @@ fn player_movement(asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: 
                 }
             }
         }
-        
-        let velocity = (transform.rotation * move_direction).normalize_or_zero() * 5.0;
+        let mut velocity = (transform.rotation * move_direction).normalize_or_zero() * 5.0;
+        if keyboard_input.just_pressed(KeyCode::ShiftLeft) && player.dash_timer.just_finished() && player.health > 0 {
+            let dash_power = 45.0;
+            if move_direction == Vec3::ZERO {
+                move_direction.z = 1.0;
+            }
+            velocity.x = move_direction.x * dash_power;
+            velocity.z = move_direction.z * dash_power;
+            let dash_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).handle();
+            commands.spawn((
+                Transform::from_translation(transform.translation),
+                SpatialAudioEmitter { instances: vec![dash_sound] }
+            ));
+            camera_effect.active_multiplier = 1.5;
+            screen_shake.strength = 1.0;
+            for mut spawner in dash_spawners.iter_mut() {
+                spawner.active = true;
+                spawner.reset();
+            }
+            player.dash_timer.reset();
+        }
         linear_velocity.x = velocity.x;
         linear_velocity.z = velocity.z;
 
@@ -1238,22 +1265,29 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     size_dash.add_key(0.0, Vec3::splat(0.8));
     size_dash.add_key(1.0, Vec3::splat(0.0));
 
+    let dash_pos_center = writer_dash.lit(Vec3::ZERO).expr();
+    let dash_pos_radius = writer_dash.lit(0.5).expr();
+    let dash_vel_center = writer_dash.lit(Vec3::ZERO).expr();
+    let dash_vel_speed = writer_dash.lit(40.0).expr();
+    let dash_lifetime = writer_dash.lit(0.4).expr();
+    let dash_drag = writer_dash.lit(8.0).expr();
+
     let dash_module = writer_dash.finish();
     let dash_effect = effects.add(
         EffectAsset::new(4000, SpawnerSettings::once(500.0.into()), dash_module) // 500 particles instantly
             .with_simulation_space(SimulationSpace::Global)
             .with_alpha_mode(AlphaMode::Add)
             .init(SetPositionSphereModifier {
-                center: writer_dash.lit(Vec3::ZERO).expr(),
-                radius: writer_dash.lit(0.5).expr(),
+                center: dash_pos_center,
+                radius: dash_pos_radius,
                 dimension: ShapeDimension::Volume,
             })
             .init(SetVelocitySphereModifier {
-                center: writer_dash.lit(Vec3::ZERO).expr(),
-                speed: writer_dash.lit(40.0).expr(), // Explosive outward speed
+                center: dash_vel_center,
+                speed: dash_vel_speed,
             })
-            .init(SetAttributeModifier::new(Attribute::LIFETIME, writer_dash.lit(0.4).expr()))
-            .update(LinearDragModifier::new(writer_dash.lit(8.0).expr())) // High drag stops them quickly
+            .init(SetAttributeModifier::new(Attribute::LIFETIME, dash_lifetime))
+            .update(LinearDragModifier::new(dash_drag)) // High drag stops them quickly
             .render(ColorOverLifetimeModifier {
                 gradient: color_dash,
                 ..Default::default()
@@ -1268,7 +1302,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         Name::new("Dash Thruster"),
         ParticleEffect::new(dash_effect),
         EffectSpawner::default(), // Defaults to inactive/waiting
-        Transform::from_xyz(0.0, 0.0, 0.0), 
+        Transform::from_xyz(0.0, 1.5, 0.0), 
         DashThruster,
     )).id();
     let left_thruster_smoke = commands.spawn((
@@ -1314,7 +1348,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     )).id();
     commands
         .entity(player)
-        .add_children(&[left_thruster_smoke, right_thruster_smoke, left_thruster_flame, right_thruster_flame]);
+        .add_children(&[left_thruster_smoke, right_thruster_smoke, left_thruster_flame, right_thruster_flame, dash_thruster]);
 
     let mut gradient_projectile = bevy_hanabi::Gradient::new();
     gradient_projectile.add_key(0.0, Vec4::new(0.9, 0.98, 1.0, 1.0));
@@ -1496,7 +1530,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     )).id();
 }
 
-fn camera_effects(aim_distance: Res<AimDistance>, mut camera_dof_query: Query<&mut DepthOfField>, mut camera: Query<&mut Transform, With<Camera>>, mut timer: Local<f32>, player_q: Query<&LinearVelocity, With<Player>>, time: Res<Time>, mut shake: ResMut<ScreenShake>) {
+fn camera_effects(mut dash_camera_query: Query<&mut Projection, With<Camera3d>>, mut dash_effect_camera: ResMut<CameraDashEffect>, aim_distance: Res<AimDistance>, mut camera_dof_query: Query<&mut DepthOfField>, mut camera: Query<&mut Transform, With<Camera>>, mut timer: Local<f32>, player_q: Query<&LinearVelocity, With<Player>>, time: Res<Time>, mut shake: ResMut<ScreenShake>) {
     let Ok(mut camera_transform) = camera.single_mut() else {
         return;
     };
@@ -1523,6 +1557,14 @@ fn camera_effects(aim_distance: Res<AimDistance>, mut camera_dof_query: Query<&m
         camera_transform.translation.x += (*timer * 0.5).cos() * 0.018;
     } else {
         *timer *= 1.0 - time.delta_secs() * 8.0;
+    }
+    let Ok(mut projection) = dash_camera_query.single_mut() else {
+        return;
+    };
+    dash_effect_camera.active_multiplier += (1.0 - dash_effect_camera.active_multiplier) * time.delta_secs() * 10.0;
+    if let Projection::Perspective(ref mut perspective) = *projection {
+        let base_fov = 90.0_f32.to_radians();
+        perspective.fov = base_fov * dash_effect_camera.active_multiplier;
     }
 }
 
@@ -1857,6 +1899,7 @@ fn main() {
         .init_resource::<AimDistance>()
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
+        .insert_resource(CameraDashEffect { active_multiplier: 1.0 })
         .insert_resource(Hitmarker)
         .insert_resource(TerrainAlgorithm::Sobel)
         .insert_resource(HitmarkerTimer(Timer::from_seconds(0.1, TimerMode::Once)))
