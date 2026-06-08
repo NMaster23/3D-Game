@@ -9,13 +9,14 @@ struct SprintBarData {
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
-    let bar_top = 0.49;
-    let bar_bottom = 0.51;
+    let bar_top = 0.0;
+    let bar_bottom = 1.0;
     
     if uv.y < bar_top || uv.y > bar_bottom {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    if uv.x < 0.002 || uv.x > 0.998 || uv.y < bar_top + 0.002 || uv.y > bar_bottom - 0.002 {
+    // Adjusted border thickness specifically for a 300x40 node
+    if uv.x < 0.006 || uv.x > 0.994 || uv.y < bar_top + 0.05 || uv.y > bar_bottom - 0.05 {
         return vec4<f32>(0.05, 0.05, 0.05, 0.9);
     }
 

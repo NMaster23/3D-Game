@@ -5,12 +5,13 @@ use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 use std::f32::consts::PI;
 use bevy_hanabi::prelude::*;
-use bevy_hanabi::AlphaMode;
 use bevy_flair::prelude::*;
 use bevy_kira_audio::prelude::*;
 use bevy_symbios_ground::{
     FbmNoise, GroundMaterialSettings, HeightMap, HeightMapMeshBuilder, NormalMethod, TerrainGenerator, build_heightfield_collider, splat_to_image, SplatMapper, SplatTexture,
 };
+use std::process::Command;
+use std::env;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -207,12 +208,18 @@ pub enum AppState {
     #[default]
     MainMenu,
     InGame,
+    GameOver
 }
 
 #[derive(Resource)]
 struct CycleMenu {
     pub options: Vec<String>,
     pub index: usize,
+}
+
+#[derive(Resource)]
+struct BotNumMenu {
+    pub num: usize,
 }
 
 #[derive(Component)]
@@ -242,11 +249,28 @@ struct PrevOptionButton;
 #[derive(Component)]
 struct NextOptionButton;
 
+#[derive(Component)]
+struct PrevButtonBotNum;
+
+#[derive(Component)]
+struct NextButtonBotNum;
+
+#[derive(Component)]
+struct BotNumTextTarget;
+
+#[derive(Resource, Default)]
+pub struct SoundCounter {
+    pub active_sounds: u32,
+}
+
 #[derive(Resource, Clone, Copy, PartialEq)]
 pub enum TerrainAlgorithm {
     AreaWeighted,
     Sobel,
 }
+
+#[derive(Component)]
+struct RestartButton;
 
 #[derive(Resource)]
 pub struct CurrentHeightMap(pub HeightMap);
@@ -271,7 +295,7 @@ impl UiMaterial for HealthBarUI {
 
 impl UiMaterial for SprintBarUI {
     fn fragment_shader() -> bevy::shader::ShaderRef {
-        "shaders/sprint_bar.wgsl".into() // Reuse the health bar shader for our sprint bar
+        "shaders/sprint_bar.wgsl".into()
     }
 }
 
@@ -338,7 +362,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     let spark_effect = effects.add(
         EffectAsset::new(1000, SpawnerSettings::once(1000.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(AlphaMode::Add)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
             .init(init_life)
             .init(init_vel)
@@ -383,7 +407,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     let arc_effect = effects.add(
         EffectAsset::new(2000, SpawnerSettings::once(2000.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(AlphaMode::Add)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos_arc)
             .init(init_life_arc)
             .init(init_vel_arc)
@@ -435,6 +459,11 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
             if let Ok(mut bot_data) = bot_query.get_mut(current_entity) {
                 let final_damage = (damage as f32 * (1.0 - total_length / max_range)).max(1.0) as i32;
                 bot_data.health -= final_damage;
+                commands.spawn((
+                    Text2d::new(format!("-{}", final_damage)),
+                    Transform::from_translation(hit.point + Vec3::Y * 2.5),
+                    DespawnTimer(Timer::from_seconds(1.0, TimerMode::Once)),
+                ));
                 timer.0.reset();
                 if current_weapon == 2 {
                     let shot_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).handle();
@@ -442,7 +471,8 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
                         Transform::from_translation(hit.point),
                         SpatialAudioEmitter {
                             instances: vec![shot_sound]
-                        }
+                        },
+                        DespawnTimer(Timer::from_seconds(5.0, TimerMode::Once)),
                     ));
                 }
                 println!("Bot hit! Damage: {}, Distance: {:.2}", final_damage, total_length);
@@ -463,7 +493,7 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
     gizmos.linestrip_gradient(intersections);
 }
 
-fn botdead(player_data: Query<&mut Transform, With<Player>>, mut commands: Commands, mut query: Query<(Entity, &BotData, &mut Transform), (Changed<BotData>, Without<Player>)>, mut living_bots: ResMut<LivingBots>, materials: ResMut<Assets<StandardMaterial>>) {
+fn botdead(mut asset_server: ResMut<AssetServer>, player_data: Query<&mut Transform, With<Player>>, mut commands: Commands, mut query: Query<(Entity, &BotData, &mut Transform), (Changed<BotData>, Without<Player>)>, mut living_bots: ResMut<LivingBots>, materials: ResMut<Assets<StandardMaterial>>, mut state: ResMut<NextState<AppState>>) {
     let Ok(player_transform) = player_data.single() else {
         return;
     };
@@ -478,7 +508,50 @@ fn botdead(player_data: Query<&mut Transform, With<Player>>, mut commands: Comma
             living_bots.0 -= 1;
         }
         if living_bots.0 == 0 {
-            println!("All bots defeated! You win!");
+            state.set(AppState::GameOver);
+        }
+    }
+}
+
+fn game_restart() {
+    let current = env::current_exe().unwrap();
+    Command::new(current).spawn().expect("Restart Failed");
+    std::process::exit(0);
+}
+
+fn game_over(mut commands: Commands, asset_server: Res<AssetServer>, mut cursor: Single<&mut CursorOptions, With<Window>>) {
+    cursor.grab_mode = CursorGrabMode::None;
+    cursor.visible = true;
+    let game_over: Handle<Image> = asset_server.load("GameOver.png");
+    commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            min_height: Val::Percent(100.0),
+            margin: UiRect::bottom(Val::Px(50.0)),
+            ..Default::default()
+        },
+        (
+            Button,
+            RestartButton,
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(100.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..Default::default()
+            },
+            BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+            children![
+                (Text::new("Play Again"), Node::default())
+            ]
+        )
+    ));
+}
+
+fn restart_handling(query: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>) {
+    for interaction in query.iter() {
+        if *interaction == Interaction::Pressed {
+            game_restart();
         }
     }
 }
@@ -527,7 +600,7 @@ fn sprint_bar(mut commands: Commands, mut materials: ResMut<Assets<SprintBarUI>>
     commands.spawn((
         MaterialNode(materials.add(SprintBarUI {
             progress: 1.0,
-            color: LinearRgba::new(0.2, 0.6, 1.0, 1.0), // Blue sprint bar
+            color: LinearRgba::new(0.2, 0.6, 1.0, 1.0),
         })),
         Node {
             width: Val::Px(300.0),
@@ -562,7 +635,7 @@ fn sprint_bar_handling(mut materials: ResMut<Assets<SprintBarUI>>, query: Query<
     if let Ok(player) = query.single() {
         for (_, material) in materials.iter_mut() {
             material.progress = player.dash_timer.fraction();
-            material.color = LinearRgba::new(0.1, 0.6, 1.0, 1.0); // Light blue
+            material.color = LinearRgba::new(0.1, 0.6, 1.0, 1.0);
         }
     }
 }
@@ -679,8 +752,8 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
     ));
 }
 
-fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut effects: ResMut<Assets<EffectAsset>>) {
-    let bot_number = 1;
+fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut effects: ResMut<Assets<EffectAsset>>, bot_menu: Res<BotNumMenu>) {
+    let bot_number = bot_menu.num as u32;
     let mut rng = rand::rng();
     let hits = rng.random_range(75..150);
     let hits_num = rng.random_range(1..5);
@@ -755,7 +828,8 @@ fn bot_handling(
                         Transform::from_translation(t.translation),
                         SpatialAudioEmitter {
                             instances: vec![footstep]
-                        }
+                        },
+                        DespawnTimer(Timer::from_seconds(5.0, TimerMode::Once)),
                     ));
                 }
             }
@@ -863,9 +937,9 @@ fn procedural_terrain(
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.25, 0.28, 0.22), // A natural, dark earthy tone
-            perceptual_roughness: 0.85, // High roughness so it doesn't look wet/shiny
-            reflectance: 0.1, // Low reflectance
+            base_color: Color::srgb(0.25, 0.28, 0.22),
+            perceptual_roughness: 0.85,
+            reflectance: 0.1,
             ..default()
         })),
         Transform::from_xyz(-512.0, 0.0, -512.0).with_scale(Vec3::new(1.0, 300.0, 1.0)),
@@ -1038,7 +1112,8 @@ fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashE
             let dash_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).handle();
             commands.spawn((
                 Transform::from_translation(transform.translation),
-                SpatialAudioEmitter { instances: vec![dash_sound] }
+                SpatialAudioEmitter { instances: vec![dash_sound] },
+                DespawnTimer(Timer::from_seconds(5.0, TimerMode::Once)),
             ));
             camera_effect.active_multiplier = 1.5;
             screen_shake.strength = 1.0;
@@ -1253,7 +1328,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let smoke_effect = effects.add(
         EffectAsset::new(32000, SpawnerSettings::once(150.0.into()), smoke_module)
             .with_simulation_space(SimulationSpace::Global)
-            .with_alpha_mode(AlphaMode::Blend)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Blend)
             .init(SetPositionSphereModifier {
                 center: smoke_pos_center,
                 radius: smoke_pos_radius,
@@ -1296,7 +1371,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let flame_effect = effects.add(
         EffectAsset::new(16000, SpawnerSettings::once(150.0.into()), flame_module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(AlphaMode::Add)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(SetPositionSphereModifier {
                 center: flame_pos_center,
                 radius: flame_pos_radius,
@@ -1321,7 +1396,6 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
 
     let mut writer_dash = ExprWriter::new();
     let mut color_dash = bevy_hanabi::Gradient::new();
-    // HDR Cyan/Blue fading to dark smoke
     color_dash.add_key(0.0, Vec4::new(0.0, 8.0, 10.0, 1.0)); 
     color_dash.add_key(0.2, Vec4::new(0.0, 1.0, 4.0, 0.8));
     color_dash.add_key(1.0, Vec4::new(0.05, 0.05, 0.05, 0.0));
@@ -1339,9 +1413,9 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
 
     let dash_module = writer_dash.finish();
     let dash_effect = effects.add(
-        EffectAsset::new(4000, SpawnerSettings::once(500.0.into()), dash_module) // 500 particles instantly
+        EffectAsset::new(4000, SpawnerSettings::once(500.0.into()), dash_module)
             .with_simulation_space(SimulationSpace::Global)
-            .with_alpha_mode(AlphaMode::Add)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(SetPositionSphereModifier {
                 center: dash_pos_center,
                 radius: dash_pos_radius,
@@ -1352,7 +1426,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
                 speed: dash_vel_speed,
             })
             .init(SetAttributeModifier::new(Attribute::LIFETIME, dash_lifetime))
-            .update(LinearDragModifier::new(dash_drag)) // High drag stops them quickly
+            .update(LinearDragModifier::new(dash_drag))
             .render(ColorOverLifetimeModifier {
                 gradient: color_dash,
                 ..Default::default()
@@ -1366,7 +1440,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let dash_thruster = commands.spawn((
         Name::new("Dash Thruster"),
         ParticleEffect::new(dash_effect),
-        EffectSpawner::default(), // Defaults to inactive/waiting
+        EffectSpawner::default(),
         Transform::from_xyz(0.0, 1.5, 0.0), 
         DashThruster,
     )).id();
@@ -1445,7 +1519,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let projectile_effect_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(AlphaMode::Add)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
@@ -1503,7 +1577,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let projectile_effect_2_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(300.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(AlphaMode::Add)
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Add)
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
@@ -1565,7 +1639,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     let projectile_effect_3_base = effects.add(
         EffectAsset::new(63000, SpawnerSettings::once(800.0.into()), module)
             .with_simulation_space(SimulationSpace::Local)
-            .with_alpha_mode(AlphaMode::Blend) 
+            .with_alpha_mode(bevy_hanabi::AlphaMode::Blend) 
             .init(init_pos)
             .init(init_vel)
             .init(init_lifetime)
@@ -1742,7 +1816,8 @@ fn shooting(
         Transform::from_translation(player_transform.translation),
         SpatialAudioEmitter {
             instances: vec![shot_sound]
-        }
+        },
+        DespawnTimer(Timer::from_seconds(5.0, TimerMode::Once)),
     ));
     let in_screen_pos = Vec2::new(window.width() / 2.0 + crosshair.x, window.height() / 2.0 + crosshair.y - 100.0);
     let (inner_camera, camera_transform) = camera.into_inner();
@@ -1856,6 +1931,37 @@ fn cycle_menu(
     }
 }
 
+fn bot_num_menu(
+    mut menu: ResMut<BotNumMenu>,
+    mut query: Query<&mut Text, With<BotNumTextTarget>>,
+    q_prev: Query<&Interaction, (Changed<Interaction>, With<PrevButtonBotNum>)>,
+    q_next: Query<&Interaction, (Changed<Interaction>, With<NextButtonBotNum>)>,
+) {
+    let mut changed = false;
+
+    for interaction in q_next.iter() {
+        if *interaction == Interaction::Pressed {
+            menu.num = menu.num.saturating_add(1);
+            changed = true;
+        }
+    }
+    for interaction in q_prev.iter() {
+        if *interaction == Interaction::Pressed {
+            menu.num = menu.num.saturating_sub(1).max(1);
+            changed = true;
+        }
+    }
+    if changed {
+        for mut text in &mut query {
+            if menu.num == 1 {
+                text.0 = format!("{} Bot", menu.num);
+            } else {
+                text.0 = format!("{} Bots", menu.num);
+            }
+        }
+    }
+}
+
 fn settings_menu(
     mut state: ResMut<NextState<AppState>>,
     q_start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
@@ -1864,6 +1970,7 @@ fn settings_menu(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     menu: Res<CycleMenu>,
+    bot_menu: Res<BotNumMenu>,
 ) {
     for interaction in q_start.iter() {
         if *interaction == Interaction::Pressed {
@@ -1886,6 +1993,11 @@ fn settings_menu(
                         (Button, PrevOptionButton, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
                         (Text::new(menu.options[menu.index].clone()), Name::new("cycle_text"), CycleTextTarget, Node::default()),
                         (Button, NextOptionButton, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
+                    ]),
+                    (Node { flex_direction: FlexDirection::Row, ..default() }, Name::new("bot_cycle_container"), children![
+                        (Button, PrevButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
+                        (Text::new(format!("{} Bots", bot_menu.num)), Name::new("bot_cycle_text"), BotNumTextTarget, Node::default()),
+                        (Button, NextButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
                     ]),
                     (Button, Name::new("apply_button"), ApplySettingsButton, Node::default(), children![(Text::new("Apply"), Node::default())]),
                 ],
@@ -1976,6 +2088,7 @@ fn main() {
         .init_asset::<WeaponData>()
         .init_asset::<ProjectileFlash>()
         .init_state::<AppState>()
+        .init_resource::<SoundCounter>()
         .init_resource::<SsaoEnabled>()
         .init_resource::<TerrainGen>()
         .init_resource::<FloatingCrosshair>()
@@ -1989,21 +2102,26 @@ fn main() {
         .insert_resource(TerrainAlgorithm::Sobel)
         .insert_resource(HitmarkerTimer(Timer::from_seconds(0.1, TimerMode::Once)))
         .insert_resource(CycleMenu {
-            options: vec!["< Low Preset >".to_string(), "< Medium Preset >".to_string(), "< High Preset >".to_string()],
+            options: vec!["Low Preset".to_string(), "Medium Preset".to_string(), "High Preset".to_string()],
             index: 0,
+        })
+        .insert_resource(BotNumMenu {
+            num: 1,
         })
         .insert_resource(PlayerModel {
             model_name: "Player/Player.glb".to_string()
         })
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
-            brightness: 10.0, // increase ambient light
+            brightness: 10.0,
             ..default()
         })
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -14.0, 0.0))) 
+        .add_systems(OnEnter(AppState::GameOver), game_over)
+        .add_systems(Update, restart_handling.run_if(in_state(AppState::GameOver)))
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
-        .add_systems(Update, (settings_menu, cycle_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
+        .add_systems(Update, (settings_menu, cycle_menu, bot_num_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
         .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, sprint_bar, weapon_selector_setup, procedural_terrain))
