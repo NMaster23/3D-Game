@@ -241,6 +241,11 @@ struct SsaoEnabled {
     pub enabled: bool,
 }
 
+#[derive(Resource)]
+struct TerrainTextureDetail {
+    pub enabled: i32,
+}
+
 #[derive(Resource, Default)]
 struct AimDistance(f32);
 
@@ -263,6 +268,21 @@ struct NextButtonBotNum;
 
 #[derive(Component)]
 struct BotNumTextTarget;
+
+#[derive(Resource)]
+struct TerrainMenu {
+    pub options: Vec<String>,
+    pub index: usize,
+}
+
+#[derive(Component)]
+struct PrevTerrainButton;
+
+#[derive(Component)]
+struct NextTerrainButton;
+
+#[derive(Component)]
+struct TerrainTextTarget;
 
 #[derive(Resource, Default)]
 pub struct SoundCounter {
@@ -932,6 +952,7 @@ fn procedural_terrain(
     mut meshes: ResMut<Assets<Mesh>>, 
     mut materials: ResMut<Assets<StandardMaterial>>, 
     algorithm: Res<TerrainAlgorithm>,
+    terrain_detail: Res<TerrainTextureDetail>,
     mut images: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
 ) {
@@ -963,17 +984,10 @@ fn procedural_terrain(
         .with_normal_method(normal_algorithm)
         .with_uv_tile_size(64.0)
         .build(&heightmap);
+    let terrain_material = terrain_detail_setup(terrain_detail.enabled, &asset_server);
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(asset_server.load("BaseColorDiff.jpg")),
-            normal_map_texture: Some(asset_server.load("NormalMapTerrain.exr")),
-            flip_normal_map_y: true, 
-            perceptual_roughness: 0.95,
-            reflectance: 0.05,
-            ..default()
-        })),
+        MeshMaterial3d(materials.add(terrain_material)),
         Transform::from_xyz(-512.0, 0.0, -512.0).with_scale(Vec3::new(1.0, 300.0, 1.0)),
     ));
     commands.spawn((
@@ -1912,6 +1926,47 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
     }
 }
 
+fn terrain_detail_setup(terrain_type: i32, asset_server: &AssetServer) -> StandardMaterial {
+    match terrain_type {
+        0 => StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(asset_server.load("Environment/High/CliffSide/textures/cliff_side_diff_4k.png")),
+            normal_map_texture: Some(asset_server.load("Environment/High/CliffSide/textures/cliff_side_nor_gl_4k.png")),
+            occlusion_texture: Some(asset_server.load("Environment/High/CliffSide/textures/cliff_side_ao_4k.png")),
+            metallic_roughness_texture: Some(asset_server.load("Environment/High/CliffSide/textures/cliff_side_arm_4k.png")),
+            metallic: 0.0,
+            perceptual_roughness: 1.0,
+            ..default()
+        },
+        1 => StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(asset_server.load("Environment/High/RockyTerrain/textures/rocky_terrain_diff_4k.png")),
+            normal_map_texture: Some(asset_server.load("Environment/High/RockyTerrain/textures/rocky_terrain_nor_gl_4k.png")),
+            occlusion_texture: Some(asset_server.load("Environment/High/RockyTerrain/textures/rocky_terrain_ao_4k.png")),
+            metallic_roughness_texture: Some(asset_server.load("Environment/High/RockyTerrain/textures/rocky_terrain_arm_4k.png")),
+            metallic: 0.0,
+            perceptual_roughness: 1.0,
+            ..default()
+        },
+        2 => StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(asset_server.load("Environment/High/Snow/textures/snow_01_diff_4k.png")),
+            normal_map_texture: Some(asset_server.load("Environment/High/Snow/textures/snow_01_nor_gl_4k.png")),
+            occlusion_texture: Some(asset_server.load("Environment/High/Snow/textures/snow_01_ao_4k.png")),
+            metallic_roughness_texture: Some(asset_server.load("Environment/High/Snow/textures/snow_01_arm_4k.png")),
+            metallic: 0.0,
+            perceptual_roughness: 1.0,
+            ..default()
+        },
+        _ => StandardMaterial {
+            base_color: Color::WHITE,
+            metallic: 0.0,
+            perceptual_roughness: 1.0,
+            ..default()
+        },
+    }
+}
+
 fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
     commands.spawn(Camera2d);
     commands.spawn((
@@ -2000,6 +2055,45 @@ fn bot_num_menu(
     }
 }
 
+fn terrain_menu_handling(
+    mut menu: ResMut<TerrainMenu>,
+    mut query: Query<&mut Text, With<TerrainTextTarget>>,
+    q_prev: Query<&Interaction, (Changed<Interaction>, With<PrevTerrainButton>)>,
+    q_next: Query<&Interaction, (Changed<Interaction>, With<NextTerrainButton>)>,
+) {
+    let mut changed = false;
+    let mut right_pressed = false;
+    let mut left_pressed = false;
+
+    for interaction in q_next.iter() {
+        if *interaction == Interaction::Pressed {
+            right_pressed = true;
+        }
+    }
+    for interaction in q_prev.iter() {
+        if *interaction == Interaction::Pressed {
+            left_pressed = true;
+        }
+    }
+
+    if right_pressed {
+        menu.index = (menu.index + 1) % menu.options.len();
+        changed = true;
+    } else if left_pressed {
+        if menu.index == 0 {
+            menu.index = menu.options.len() - 1;
+        } else {
+            menu.index -= 1;
+        }
+        changed = true;
+    }
+    if changed {
+        for mut text in &mut query {
+            text.0 = menu.options[menu.index].to_string();
+        }
+    }
+}
+
 fn settings_menu(
     mut state: ResMut<NextState<AppState>>,
     q_start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
@@ -2009,6 +2103,7 @@ fn settings_menu(
     asset_server: Res<AssetServer>,
     menu: Res<CycleMenu>,
     bot_menu: Res<BotNumMenu>,
+    terrain_menu: Res<TerrainMenu>,
 ) {
     for interaction in q_start.iter() {
         if *interaction == Interaction::Pressed {
@@ -2037,6 +2132,11 @@ fn settings_menu(
                         (Text::new(format!("{} Bots", bot_menu.num)), Name::new("bot_cycle_text"), BotNumTextTarget, Node::default()),
                         (Button, NextButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
                     ]),
+                    (Node { flex_direction: FlexDirection::Row, ..default() }, Name::new("terrain_cycle_container"), children![
+                        (Button, PrevTerrainButton, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
+                        (Text::new(terrain_menu.options[terrain_menu.index].clone()), Name::new("terrain_cycle_text"), TerrainTextTarget, Node::default()),
+                        (Button, NextTerrainButton, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
+                    ]),
                     (Button, Name::new("apply_button"), ApplySettingsButton, Node::default(), children![(Text::new("Apply"), Node::default())]),
                 ],
             ));
@@ -2044,10 +2144,11 @@ fn settings_menu(
     }
 }
 
-fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, mut player_model: ResMut<PlayerModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
+fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, terrain_menu: Res<TerrainMenu>, mut terrain_detail: ResMut<TerrainTextureDetail>, mut player_model: ResMut<PlayerModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
     for interaction in query.iter() {
         if *interaction == Interaction::Pressed {
             println!("Settings applied!");
+            terrain_detail.enabled = terrain_menu.index as i32;
             match menu.index {
                 0 => {
                     player_model.model_name = "Player/Player.glb".to_string();
@@ -2146,6 +2247,11 @@ fn main() {
         .insert_resource(BotNumMenu {
             num: 1,
         })
+        .insert_resource(TerrainMenu {
+            options: vec!["Cliff Side".to_string(), "Rocky Terrain".to_string(), "Snow".to_string()],
+            index: 0,
+        })
+        .insert_resource(TerrainTextureDetail { enabled: 0 })
         .insert_resource(PlayerModel {
             model_name: "Player/Player.glb".to_string()
         })
@@ -2159,7 +2265,7 @@ fn main() {
         .add_systems(OnEnter(AppState::GameOver), game_over)
         .add_systems(Update, restart_handling.run_if(in_state(AppState::GameOver)))
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
-        .add_systems(Update, (settings_menu, cycle_menu, bot_num_menu, settings_apply).run_if(in_state(AppState::MainMenu)))
+        .add_systems(Update, (settings_menu, cycle_menu, bot_num_menu, terrain_menu_handling, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
         .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, sprint_bar, weapon_selector_setup, procedural_terrain))
