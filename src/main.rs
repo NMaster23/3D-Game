@@ -1,4 +1,4 @@
-use bevy::{anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog, VolumetricLight}, math::VectorSpace, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::AsBindGroup, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{render::render_resource::TextureFormat, image::ImageLoaderSettings, anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog, VolumetricLight}, math::VectorSpace, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::AsBindGroup, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -956,44 +956,40 @@ fn procedural_terrain(
     mut images: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
 ) {
-    let mut heightmap = HeightMap::new(1024, 1024, 1.0);
-    let mut noise = FbmNoise::new(1337);
-    noise.octaves = 6;
-    noise.lacunarity = 2.2;
-    noise.persistence = 0.45;
-    noise.base_frequency = 0.75;
-    noise.generate(&mut heightmap);
-    for val in heightmap.data_mut().iter_mut() {
-        *val = 1.0 - (*val * 2.0 - 1.0).abs();
-        *val = val.powi(2);
-    }
+    let seed = rand::rng().random_range(1..2147483647);
+    let mut heightmap = HeightMap::new(256, 512, 1.0);
+    FbmNoise::new(seed).generate(&mut heightmap);
     heightmap.normalize();
     for val in heightmap.data_mut().iter_mut() {
         let base = *val;
         let ridges = 1.0 - (base * 2.0 - 1.0).abs();
         let steep_peaks = ridges * ridges;
         let mixed = (base * 0.4) + (steep_peaks * 0.6);
-        *val = mixed.powf(1.8);
+        *val = mixed.powf(1.8); 
     }
     let normal_algorithm = match *algorithm {
         TerrainAlgorithm::AreaWeighted => NormalMethod::AreaWeighted,
         TerrainAlgorithm::Sobel => NormalMethod::Sobel,
     };
     let collider = build_heightfield_collider(&heightmap);
-    let mesh = HeightMapMeshBuilder::new()
+    let mut mesh = HeightMapMeshBuilder::new()
         .with_normal_method(normal_algorithm)
-        .with_uv_tile_size(64.0)
+        .with_uv_tile_size(32.0)
         .build(&heightmap);
+    if let Err(e) = mesh.generate_tangents() {
+        println!("Failed to generate tangents: {}", e);
+    }
     let terrain_material = terrain_detail_setup(terrain_detail.enabled, &asset_server);
+    let scale = Vec3::new(1.0, 300.0, 1.0);
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(terrain_material)),
-        Transform::from_xyz(-512.0, 0.0, -512.0).with_scale(Vec3::new(1.0, 300.0, 1.0)),
+        Transform::from_xyz(-128.0, 0.0, -128.0).with_scale(scale),
     ));
     commands.spawn((
         collider,
         RigidBody::Static,
-        Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::new(1.0, 300.0, 1.0)),
+        Transform::from_xyz(-128.0, 0.0, -128.0).with_scale(scale),
     ));
     let weight_map = SplatMapper::default().generate(&heightmap);
     let image = splat_to_image(&weight_map);
@@ -1269,6 +1265,7 @@ fn setup(
         ));
     });
     let sky = asset_server.load("Environment/Sky.ktx2");
+    let skybox_brightness = if graphics.enabled { 1500.0 } else { 350.0 };
     let mut camera = commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -1291,7 +1288,7 @@ fn setup(
         },
         Skybox {
         image: sky.clone(),
-        brightness: 350.0,
+            brightness: skybox_brightness,
         ..Default::default()
         },
         SpatialAudioReceiver,
@@ -1927,43 +1924,60 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
 }
 
 fn terrain_detail_setup(terrain_type: i32, asset_server: &AssetServer) -> StandardMaterial {
+    let mut biome = rand::rng().random_range(1..3);
+    let base_dir = String::new();
+    match biome {
+        1 => {
+            base_dir = format!("CliffSide/textures");
+        },
+        2 => {
+            base_dir = format!("RockyTerrain/textures");
+        },
+        3 => {
+            base_dir = format!("Snow/textures");
+        },
+        _ => {
+            base_dir = format!("CliffSide/textures");
+        }
+    }
     match terrain_type {
-        0 => StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(asset_server.load("Environment/High/CliffSide/textures/cliff_side_diff_4k.png")),
-            normal_map_texture: Some(asset_server.load("Environment/High/CliffSide/textures/cliff_side_nor_gl_4k.png")),
-            occlusion_texture: Some(asset_server.load("Environment/High/CliffSide/textures/cliff_side_ao_4k.png")),
-            metallic_roughness_texture: Some(asset_server.load("Environment/High/CliffSide/textures/cliff_side_arm_4k.png")),
-            metallic: 0.0,
-            perceptual_roughness: 1.0,
-            ..default()
+        0 => {
+            StandardMaterial {
+                base_color_texture: Some(asset_server.load("textures/CliffSide/cliff_side_diff_4k.png")),
+                normal_map_texture: Some(asset_server.load("textures/CliffSide/cliff_side_nor_gl_4k.png")),
+                occlusion_texture: Some(asset_server.load("textures/CliffSide/cliff_side_ao_4k.png")),
+                perceptual_roughness_texture: Some(asset_server.load("textures/CliffSide/cliff_side_rough_4k.png")),
+                displacement_texture: Some(asset_server.load("textures/CliffSide/cliff_side_disp_4k.png")),
+                displacement_scale: 0.5,
+                ..Default::default()
+            }
         },
-        1 => StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(asset_server.load("Environment/High/RockyTerrain/textures/rocky_terrain_diff_4k.png")),
-            normal_map_texture: Some(asset_server.load("Environment/High/RockyTerrain/textures/rocky_terrain_nor_gl_4k.png")),
-            occlusion_texture: Some(asset_server.load("Environment/High/RockyTerrain/textures/rocky_terrain_ao_4k.png")),
-            metallic_roughness_texture: Some(asset_server.load("Environment/High/RockyTerrain/textures/rocky_terrain_arm_4k.png")),
-            metallic: 0.0,
-            perceptual_roughness: 1.0,
-            ..default()
+        1 => {
+            StandardMaterial {
+                base_color_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_diff_4k.png")),
+                normal_map_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_nor_gl_4k.png")),
+                occlusion_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_ao_4k.png")),
+                perceptual_roughness_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_rough_4k.png")),
+                displacement_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_disp_4k.png")),
+                displacement_scale: 0.5,
+                ..Default::default()
+            }
         },
-        2 => StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(asset_server.load("Environment/High/Snow/textures/snow_01_diff_4k.png")),
-            normal_map_texture: Some(asset_server.load("Environment/High/Snow/textures/snow_01_nor_gl_4k.png")),
-            occlusion_texture: Some(asset_server.load("Environment/High/Snow/textures/snow_01_ao_4k.png")),
-            metallic_roughness_texture: Some(asset_server.load("Environment/High/Snow/textures/snow_01_arm_4k.png")),
-            metallic: 0.0,
-            perceptual_roughness: 1.0,
-            ..default()
+        2 => {
+            StandardMaterial {
+                base_color_texture: Some(asset_server.load("textures/Snow/snow_01_diff_4k.png")),
+                normal_map_texture: Some(asset_server.load("textures/Snow/snow_01_nor_gl_4k.png")),
+                occlusion_texture: Some(asset_server.load("textures/Snow/snow_01_ao_4k.png")),
+                perceptual_roughness_texture: Some(asset_server.load("textures/Snow/snow_01_rough_4k.png")),
+                displacement_texture: Some(asset_server.load("textures/Snow/snow_01_disp_4k.png")),
+                displacement_scale: 0.2, // Snow usually has less extreme displacement than rock
+                ..Default::default()
+            }
         },
         _ => StandardMaterial {
             base_color: Color::WHITE,
-            metallic: 0.0,
-            perceptual_roughness: 1.0,
-            ..default()
-        },
+            ..Default::default()
+        }
     }
 }
 
