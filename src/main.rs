@@ -151,6 +151,12 @@ struct BotConfig {
     pub is_disrupted: bool,
 }
 
+#[derive(Component, Debug, Clone)]
+pub struct DamageText {
+    pub world_pos: Vec3,
+    pub velocity: Vec3,
+}
+
 #[derive(Component)]
 struct DespawnTimer(Timer);
 
@@ -459,8 +465,22 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
                 let final_damage = (damage as f32 * (1.0 - total_length / max_range)).max(1.0) as i32;
                 bot_data.health -= final_damage;
                 commands.spawn((
-                    Text2d::new(format!("-{}", final_damage)),
-                    Transform::from_translation(hit_point + Vec3::Y * 2.5),
+                    Text::new(format!("-{}", final_damage)),
+                    TextColor(Color::srgb(1.0, 0.2, 0.2)),
+                    TextFont {
+                        font_size: 32.0,
+                        ..Default::default()
+                    },
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(-1000.0),
+                        top: Val::Px(-1000.0),
+                        ..Default::default()
+                    },
+                    DamageText {
+                        world_pos: hit_point + Vec3::Y * 2.5,
+                        velocity: Vec3::new(0.0, 2.0, 0.9),
+                    },
                     DespawnTimer(Timer::from_seconds(1.0, TimerMode::Once)),
                 ));
                 timer.0.reset();
@@ -496,6 +516,21 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
         }
     }
     gizmos.linestrip_gradient(intersections);
+}
+
+fn update_damage_text(time: Res<Time>, camera_query: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mut text_query: Query<(&mut Node, &mut DamageText)>) {
+    let (camera, camera_transform) = *camera_query;
+    for (mut node, mut damage) in text_query.iter_mut() {
+        let mut damage_clone = damage.clone();
+        damage.world_pos += damage_clone.velocity * time.delta_secs();
+        if let Ok(screen_pos) = camera.world_to_viewport(camera_transform, damage.world_pos) {
+            node.left = Val::Px(screen_pos.x);
+            node.top = Val::Px(screen_pos.y);
+            node.display = Display::Flex;
+        } else {
+            node.display = Display::None; 
+        }
+    }
 }
 
 fn botdead(mut asset_server: ResMut<AssetServer>, player_data: Query<&mut Transform, With<Player>>, mut commands: Commands, mut query: Query<(Entity, &BotData, &mut Transform), (Changed<BotData>, Without<Player>)>, mut living_bots: ResMut<LivingBots>, materials: ResMut<Assets<StandardMaterial>>, mut state: ResMut<NextState<AppState>>) {
@@ -898,6 +933,7 @@ fn procedural_terrain(
     mut materials: ResMut<Assets<StandardMaterial>>, 
     algorithm: Res<TerrainAlgorithm>,
     mut images: ResMut<Assets<Image>>,
+    asset_server: Res<AssetServer>,
 ) {
     let mut heightmap = HeightMap::new(1024, 1024, 1.0);
     let mut noise = FbmNoise::new(1337);
@@ -911,20 +947,12 @@ fn procedural_terrain(
         *val = val.powi(2);
     }
     heightmap.normalize();
-    let width = heightmap.width();
-    let height = heightmap.height();
-    let mut slope_data = vec![0.0; width * height];
-    for y in 1..height - 1 {
-        for x in 1..width - 1 {
-            let h_right = heightmap.get(x + 1, y);
-            let h_left = heightmap.get(x - 1, y);
-            let h_up = heightmap.get(x, y + 1);
-            let h_down = heightmap.get(x, y - 1);
-            let dx = h_right - h_left;
-            let dy = h_up - h_down;
-            let slope = (dx * dx + dy * dy).sqrt();
-            slope_data[y * width + x] = slope.clamp(0.0, 1.0);
-        }
+    for val in heightmap.data_mut().iter_mut() {
+        let base = *val;
+        let ridges = 1.0 - (base * 2.0 - 1.0).abs();
+        let steep_peaks = ridges * ridges;
+        let mixed = (base * 0.4) + (steep_peaks * 0.6);
+        *val = mixed.powf(1.8);
     }
     let normal_algorithm = match *algorithm {
         TerrainAlgorithm::AreaWeighted => NormalMethod::AreaWeighted,
@@ -933,14 +961,17 @@ fn procedural_terrain(
     let collider = build_heightfield_collider(&heightmap);
     let mesh = HeightMapMeshBuilder::new()
         .with_normal_method(normal_algorithm)
-        .with_uv_tile_size(2.0)
+        .with_uv_tile_size(64.0)
         .build(&heightmap);
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.25, 0.28, 0.22),
-            perceptual_roughness: 0.85,
-            reflectance: 0.1,
+            base_color: Color::WHITE,
+            base_color_texture: Some(asset_server.load("BaseColorDiff.jpg")),
+            normal_map_texture: Some(asset_server.load("NormalMapTerrain.exr")),
+            flip_normal_map_y: true, 
+            perceptual_roughness: 0.95,
+            reflectance: 0.05,
             ..default()
         })),
         Transform::from_xyz(-512.0, 0.0, -512.0).with_scale(Vec3::new(1.0, 300.0, 1.0)),
@@ -2147,6 +2178,7 @@ fn main() {
                 health_bar_handling,
                 sprint_bar_handling,
                 despawn_ray,
+                update_damage_text,
                 targeting_disruptor,
                 player_death,
                 botdead,
