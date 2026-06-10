@@ -12,6 +12,12 @@ use bevy_symbios_ground::{
 };
 use std::process::Command;
 use std::env;
+use bevy_symbios_texture::{
+    generator::{TextureGenerator, TextureMap},
+    ground::{GroundConfig, GroundGenerator},
+};
+use bevy::render::render_resource::{Extent3d, TextureDimension};
+use bevy::asset::RenderAssetUsages;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -246,7 +252,7 @@ struct SsaoEnabled {
     pub enabled: bool,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone, Copy)]
 struct TerrainTextureDetail {
     pub enabled: i32,
     pub quality: usize,
@@ -318,8 +324,16 @@ pub enum TerrainAlgorithm {
 #[derive(Component)]
 struct RestartButton;
 
-#[derive(Resource)]
+#[derive(Component, Resource)]
 pub struct CurrentHeightMap(pub HeightMap);
+
+impl Default for LoadedChunks {
+    fn default() -> Self {
+        Self {
+            chunks: HashMap::new(),
+        }
+    }
+}
 
 impl Default for SsaoEnabled {
     fn default() -> Self {
@@ -968,15 +982,16 @@ fn bot_handling(
 }
 
 fn procedural_terrain_setup(
-    mut commands: Commands, 
-    mut meshes: ResMut<Assets<Mesh>>, 
-    mut materials: ResMut<Assets<StandardMaterial>>, 
-    algorithm: Res<TerrainAlgorithm>,
-    terrain_detail: Res<TerrainTextureDetail>,
-    mut images: ResMut<Assets<Image>>,
-    asset_server: Res<AssetServer>,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>, 
+    materials: &mut Assets<StandardMaterial>, 
+    algorithm: TerrainAlgorithm,
+    terrain_detail: TerrainTextureDetail,
+    images: &mut Assets<Image>,
+    asset_server: &AssetServer,
     x: f32,
     z: f32,
+    chunk_entity: Entity,
 ) {
     let seed = rand::rng().random_range(1..2147483647);
     let mut heightmap = HeightMap::new(256, 256, 1.0);
@@ -989,35 +1004,37 @@ fn procedural_terrain_setup(
         let mixed = (base * 0.4) + (steep_peaks * 0.6);
         *val = mixed.powf(1.8); 
     }
-    let normal_algorithm = match *algorithm {
+    let normal_algorithm = match algorithm {
         TerrainAlgorithm::AreaWeighted => NormalMethod::AreaWeighted,
         TerrainAlgorithm::Sobel => NormalMethod::Sobel,
     };
     let mut mesh = HeightMapMeshBuilder::new()
-        .with_normal_method(normal_algorithm)
+        .with_normal_method(normal_algorithm.into())
         .with_uv_tile_size(32.0)
         .build(&heightmap);
     if let Err(e) = mesh.generate_tangents() {
         println!("Failed to generate tangents: {}", e);
     }
     let collider = build_heightfield_collider(&heightmap);
-    let terrain_material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, &asset_server);
+    let terrain_material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, images);
     let scale = Vec3::new(1.0, 150.0, 1.0);
-    commands.spawn((
+    commands.entity(chunk_entity).insert((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(terrain_material)),
-        Transform::from_xyz(x, 0.0, z).with_scale(scale),
+        Transform::from_xyz(x - 128.0, 0.0, z - 128.0).with_scale(scale),
+        CurrentHeightMap(heightmap.clone()),
     ));
-    commands.spawn((
+    let col_entity = commands.spawn((
+        Name::new("Physics Collider"),
         collider,
         RigidBody::Static,
-        Transform::from_xyz(x, 0.0, z).with_scale(scale),
-    ));
+        Transform::from_xyz(128.0, 0.0, 128.0), 
+    )).id();
+    
+    commands.entity(chunk_entity).add_child(col_entity);
     let weight_map = SplatMapper::default().generate(&heightmap);
     let image = splat_to_image(&weight_map);
-    commands.insert_resource(SplatTexture {
-        handle: images.add(image)
-    });
+    commands.insert_resource(SplatTexture { handle: images.add(image) });
     commands.insert_resource(GroundMaterialSettings::new(weight_map));
     commands.insert_resource(CurrentHeightMap(heightmap));
 }
@@ -1037,7 +1054,7 @@ fn procedural_terrain(
     let Ok(player_transform) = player_data.single() else {
         return;
     };
-    let offset = 128.0;
+    let offset = 256.0;
     let play_grid_x = (player_transform.translation.x / offset).round() as i32;
     let play_grid_z = (player_transform.translation.z / offset).round() as i32;
     for dx in -render_dist.num..=render_dist.num {
@@ -1048,10 +1065,30 @@ fn procedural_terrain(
                 let world_z = chunk_pos.y as f32 * offset;
                 let chunk_entity = commands.spawn(Name::new(format!("Chunk {}, {}", chunk_pos.x, chunk_pos.y))).id();
                 chunks.chunks.insert(chunk_pos, chunk_entity);
-                procedural_terrain_setup(commands, meshes, materials, algorithm, terrain_detail, images, asset_server, world_x, world_z);
+                procedural_terrain_setup(
+                    &mut commands, 
+                    &mut meshes, 
+                    &mut materials, 
+                    *algorithm, 
+                    *terrain_detail, 
+                    &mut images, 
+                    &asset_server,
+                    world_x, 
+                    world_z,
+                    chunk_entity
+                );
             }
-            return;
         }
+    }
+    let mut chunk_despawn_buffer = Vec::new();
+    for (chunk_pos, chunk_entity) in &mut chunks.chunks {
+        if (chunk_pos.x - play_grid_x).abs() > render_dist.num || (chunk_pos.y - play_grid_z).abs() > render_dist.num {
+            commands.entity(*chunk_entity).despawn();
+            chunk_despawn_buffer.push(chunk_pos.clone());
+        }
+    }
+    for pos in chunk_despawn_buffer {
+        chunks.chunks.remove(&pos);
     }
 }
 
@@ -1978,35 +2015,61 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
     }
 }
 
-fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &AssetServer) -> StandardMaterial {
-    let (folder, prefix, parallax_scale) = match terrain_type {
-        0 => ("CliffSide", "cliff_side", 0.5),
-        1 => ("RockyTerrain", "rocky_terrain", 0.5),
-        2 => ("Snow", "snow_01", 0.2),
-        _ => ("CliffSide", "cliff_side", 0.5),
+fn terrain_detail_setup(terrain_type: i32, quality: usize, images: &mut Assets<Image>) -> StandardMaterial {
+    let resolution = match quality {
+        0 => 512,
+        1 => 1024,
+        2 => 2048,
+        _ => 1024,
     };
-    let (quality_str, res_suffix) = match quality {
-        0 => ("Low", "1k"),
-        1 => ("Medium", "2k"),
-        2 => ("High", "4k"),
-        _ => ("High", "4k"),
+    let config = match terrain_type {
+        2 => GroundConfig {
+            seed: 42,
+            color_dry: [0.85, 0.9, 0.95],
+            color_moist: [0.65, 0.75, 0.85], 
+            ..Default::default()
+        },
+        _ => GroundConfig {
+            seed: 42,
+            macro_scale: 4.0,
+            micro_scale: 12.0,
+            ..Default::default()
+        },
     };
-    let base_dir = format!("Environment/{}/{}/textures", quality_str, folder);
-    let load_16bit_grayscale = |file_path: String| {
-        asset_server.load_with_settings(
-            file_path,
-            |settings: &mut ImageLoaderSettings| {
-                settings.texture_format = Some(TextureFormat::R16Unorm);
-            }
+    let texture_map: TextureMap = GroundGenerator::new(config)
+        .generate(resolution as u32, resolution as u32)
+        .expect("Failed to generate terrain textures");
+    let make_image = |data: Vec<u8>, is_srgb: bool| -> Image {
+        let extent = Extent3d {
+            width: resolution as u32,
+            height: resolution as u32,
+            depth_or_array_layers: 1,
+        };
+        let expected_pixels = (resolution * resolution) as usize;
+        let format = if data.len() == expected_pixels * 4 {
+            if is_srgb { TextureFormat::Rgba8UnormSrgb } else { TextureFormat::Rgba8Unorm }
+        } else if data.len() == expected_pixels * 2 {
+            TextureFormat::Rg8Unorm
+        } else {
+            TextureFormat::R8Unorm
+        };
+        Image::new(
+            extent,
+            TextureDimension::D2,
+            data,
+            format,
+            RenderAssetUsages::default(),
         )
     };
+    let albedo_handle = images.add(make_image(texture_map.albedo, true));
+    let normal_handle = images.add(make_image(texture_map.normal, false));
+    let roughness_handle = images.add(make_image(texture_map.roughness, false));
+
     StandardMaterial {
-        base_color_texture: Some(asset_server.load(format!("{}/{}_diff_{}.png", base_dir, prefix, res_suffix))),
-        normal_map_texture: Some(asset_server.load(format!("{}/{}_nor_gl_{}.png", base_dir, prefix, res_suffix))),
-        occlusion_texture: Some(load_16bit_grayscale(format!("{}/{}_ao_{}.png", base_dir, prefix, res_suffix))),
-        metallic_roughness_texture: Some(load_16bit_grayscale(format!("{}/{}_rough_{}.png", base_dir, prefix, res_suffix))),
-        depth_map: Some(load_16bit_grayscale(format!("{}/{}_disp_{}.png", base_dir, prefix, res_suffix))),
-        parallax_depth_scale: parallax_scale,
+        base_color_texture: Some(albedo_handle),
+        normal_map_texture: Some(normal_handle),
+        metallic_roughness_texture: Some(roughness_handle),
+        perceptual_roughness: 1.0,
         ..Default::default()
     }
 }
@@ -2122,9 +2185,9 @@ fn render_dist_menu(
     if changed {
         for mut text in &mut query {
             if menu.num == 1 {
-                text.0 = format!("{} Bot", menu.num);
+                text.0 = format!("{} Chunk (Render Distance)", menu.num);
             } else {
-                text.0 = format!("{} Bots", menu.num);
+                text.0 = format!("{} Chunks (Render Distance)", menu.num);
             }
         }
     }
@@ -2316,6 +2379,7 @@ fn main() {
         .init_resource::<SelectedWeapon>()
         .init_resource::<BotConfig>()
         .init_resource::<AimDistance>()
+        .init_resource::<LoadedChunks>()
         .insert_resource(RenderDistance { num: 1 })
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
@@ -2348,14 +2412,15 @@ fn main() {
         .add_systems(OnEnter(AppState::GameOver), game_over)
         .add_systems(Update, restart_handling.run_if(in_state(AppState::GameOver)))
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
-        .add_systems(Update, (settings_menu, cycle_menu, bot_num_menu, terrain_menu_handling, settings_apply).run_if(in_state(AppState::MainMenu)))
+        .add_systems(Update, (settings_menu, cycle_menu, bot_num_menu, render_dist_menu, terrain_menu_handling, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
-        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, sprint_bar, weapon_selector_setup, procedural_terrain))
+        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, sprint_bar, weapon_selector_setup))
         .add_systems(
             Update,
             (
                 player_movement,
+                procedural_terrain,
                 setup_scene_once_loaded,
                 movement_animations,
                 camera_positioning,
@@ -2372,7 +2437,7 @@ fn main() {
                 player_death,
                 botdead,
                 particle_effects,
-                bevy_symbios_ground::sync_splat_texture,
+                bevy_symbios_ground::sync_splat_texture.run_if(resource_exists::<SplatTexture>),
             ).run_if(in_state(AppState::InGame)),
         )
         .add_systems(
