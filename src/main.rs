@@ -228,6 +228,11 @@ struct BotNumMenu {
     pub num: usize,
 }
 
+#[derive(Resource)]
+struct RenderDistance {
+    pub num: i32,
+}
+
 #[derive(Component)]
 struct CycleTextTarget;
 
@@ -270,6 +275,15 @@ struct NextButtonBotNum;
 #[derive(Component)]
 struct BotNumTextTarget;
 
+#[derive(Component)]
+struct PrevRenderDistNum;
+
+#[derive(Component)]
+struct NextRenderDistNum;
+
+#[derive(Component)]
+struct RenderDistTarget;
+
 #[derive(Resource)]
 struct TerrainMenu {
     pub options: Vec<String>,
@@ -294,9 +308,6 @@ pub struct SoundCounter {
 struct LoadedChunks {
     chunks: HashMap<IVec2, Entity>,
 }
-
-#[derive(Resource)]
-struct RenderDistance(i32);
 
 #[derive(Resource, Clone, Copy, PartialEq)]
 pub enum TerrainAlgorithm {
@@ -1029,8 +1040,8 @@ fn procedural_terrain(
     let offset = 128.0;
     let play_grid_x = (player_transform.translation.x / offset).round() as i32;
     let play_grid_z = (player_transform.translation.z / offset).round() as i32;
-    for dx in -render_dist.0..=render_dist.0 {
-        for dz in -render_dist.0..=render_dist.0 {
+    for dx in -render_dist.num..=render_dist.num {
+        for dz in -render_dist.num..=render_dist.num {
             let chunk_pos = IVec2::new(play_grid_x + dx, play_grid_z + dz);
             if !chunks.chunks.contains_key(&chunk_pos) {
                 let world_x = chunk_pos.x as f32 * offset;
@@ -2088,6 +2099,37 @@ fn bot_num_menu(
     }
 }
 
+fn render_dist_menu(
+    mut menu: ResMut<RenderDistance>,
+    mut query: Query<&mut Text, With<RenderDistTarget>>,
+    q_prev: Query<&Interaction, (Changed<Interaction>, With<PrevRenderDistNum>)>,
+    q_next: Query<&Interaction, (Changed<Interaction>, With<NextRenderDistNum>)>,
+) {
+    let mut changed = false;
+
+    for interaction in q_next.iter() {
+        if *interaction == Interaction::Pressed {
+            menu.num = menu.num.saturating_add(1);
+            changed = true;
+        }
+    }
+    for interaction in q_prev.iter() {
+        if *interaction == Interaction::Pressed {
+            menu.num = menu.num.saturating_sub(1).max(1);
+            changed = true;
+        }
+    }
+    if changed {
+        for mut text in &mut query {
+            if menu.num == 1 {
+                text.0 = format!("{} Bot", menu.num);
+            } else {
+                text.0 = format!("{} Bots", menu.num);
+            }
+        }
+    }
+}
+
 fn terrain_menu_handling(
     mut menu: ResMut<TerrainMenu>,
     mut query: Query<&mut Text, With<TerrainTextTarget>>,
@@ -2136,6 +2178,7 @@ fn settings_menu(
     asset_server: Res<AssetServer>,
     menu: Res<CycleMenu>,
     bot_menu: Res<BotNumMenu>,
+    render_dist: Res<RenderDistance>,
     terrain_menu: Res<TerrainMenu>,
 ) {
     for interaction in q_start.iter() {
@@ -2163,6 +2206,11 @@ fn settings_menu(
                     (Node { flex_direction: FlexDirection::Row, ..default() }, Name::new("bot_cycle_container"), children![
                         (Button, PrevButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
                         (Text::new(format!("{} Bots", bot_menu.num)), Name::new("bot_cycle_text"), BotNumTextTarget, Node::default()),
+                        (Button, NextButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
+                    ]),
+                    (Node { flex_direction: FlexDirection::Row, ..default() }, Name::new("render_dist_cycle_container"), children![
+                        (Button, PrevButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
+                        (Text::new(format!("{} Chunks (Render Distance)", render_dist.num)), Name::new("render_dist_cycle_text"), RenderDistTarget, Node::default()),
                         (Button, NextButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
                     ]),
                     (Node { flex_direction: FlexDirection::Row, ..default() }, Name::new("terrain_cycle_container"), children![
@@ -2268,7 +2316,7 @@ fn main() {
         .init_resource::<SelectedWeapon>()
         .init_resource::<BotConfig>()
         .init_resource::<AimDistance>()
-        .insert_resource(RenderDistance { 0: 1 })
+        .insert_resource(RenderDistance { num: 1 })
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
         .insert_resource(CameraDashEffect { active_multiplier: 1.0 })
