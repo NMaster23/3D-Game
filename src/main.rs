@@ -1,6 +1,6 @@
 use bevy::{render::render_resource::TextureFormat, image::ImageLoaderSettings, anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog, VolumetricLight}, math::VectorSpace, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::AsBindGroup, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
-use std::{ops::{Deref, DerefMut}, time::Duration};
+use std::{collections::HashMap, ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 use std::f32::consts::PI;
@@ -244,6 +244,7 @@ struct SsaoEnabled {
 #[derive(Resource)]
 struct TerrainTextureDetail {
     pub enabled: i32,
+    pub quality: usize,
 }
 
 #[derive(Resource, Default)]
@@ -288,6 +289,14 @@ struct TerrainTextTarget;
 pub struct SoundCounter {
     pub active_sounds: u32,
 }
+
+#[derive(Resource)]
+struct LoadedChunks {
+    chunks: HashMap<IVec2, Entity>,
+}
+
+#[derive(Resource)]
+struct RenderDistance(i32);
 
 #[derive(Resource, Clone, Copy, PartialEq)]
 pub enum TerrainAlgorithm {
@@ -464,9 +473,9 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
         let Some(hit) = spatial_query.cast_ray(
             ray.origin, 
             ray.direction, 
-            max_range, // The maximum distance you want the ray to travel
-            true,      // Treat colliders as solid
-            &SpatialQueryFilter::from_excluded_entities([shooter_entity]) // Or SpatialQueryFilter::from_excluded_entities([shooter_entity])
+            max_range,
+            true,
+            &SpatialQueryFilter::from_excluded_entities([shooter_entity])
         ) else {
             break;
         };
@@ -891,9 +900,9 @@ fn bot_handling(
                 let Some(hits) = spatial_query.cast_ray(
                     ray.origin, 
                     ray.direction, 
-                    max_range, // The maximum distance you want the ray to travel
-                    true,      // Treat colliders as solid
-                    &SpatialQueryFilter::default() // Or SpatialQueryFilter::from_excluded_entities([shooter_entity])
+                    max_range,
+                    true,
+                    &SpatialQueryFilter::default()
                 ) else {
                     break;
                 };
@@ -947,7 +956,7 @@ fn bot_handling(
     }
 }
 
-fn procedural_terrain(
+fn procedural_terrain_setup(
     mut commands: Commands, 
     mut meshes: ResMut<Assets<Mesh>>, 
     mut materials: ResMut<Assets<StandardMaterial>>, 
@@ -955,9 +964,11 @@ fn procedural_terrain(
     terrain_detail: Res<TerrainTextureDetail>,
     mut images: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
+    x: f32,
+    z: f32,
 ) {
     let seed = rand::rng().random_range(1..2147483647);
-    let mut heightmap = HeightMap::new(256, 512, 1.0);
+    let mut heightmap = HeightMap::new(256, 256, 1.0);
     FbmNoise::new(seed).generate(&mut heightmap);
     heightmap.normalize();
     for val in heightmap.data_mut().iter_mut() {
@@ -971,7 +982,6 @@ fn procedural_terrain(
         TerrainAlgorithm::AreaWeighted => NormalMethod::AreaWeighted,
         TerrainAlgorithm::Sobel => NormalMethod::Sobel,
     };
-    let collider = build_heightfield_collider(&heightmap);
     let mut mesh = HeightMapMeshBuilder::new()
         .with_normal_method(normal_algorithm)
         .with_uv_tile_size(32.0)
@@ -979,17 +989,18 @@ fn procedural_terrain(
     if let Err(e) = mesh.generate_tangents() {
         println!("Failed to generate tangents: {}", e);
     }
-    let terrain_material = terrain_detail_setup(terrain_detail.enabled, &asset_server);
-    let scale = Vec3::new(1.0, 300.0, 1.0);
+    let collider = build_heightfield_collider(&heightmap);
+    let terrain_material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, &asset_server);
+    let scale = Vec3::new(1.0, 150.0, 1.0);
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(terrain_material)),
-        Transform::from_xyz(-128.0, 0.0, -128.0).with_scale(scale),
+        Transform::from_xyz(x, 0.0, z).with_scale(scale),
     ));
     commands.spawn((
         collider,
         RigidBody::Static,
-        Transform::from_xyz(-128.0, 0.0, -128.0).with_scale(scale),
+        Transform::from_xyz(x, 0.0, z).with_scale(scale),
     ));
     let weight_map = SplatMapper::default().generate(&heightmap);
     let image = splat_to_image(&weight_map);
@@ -998,6 +1009,39 @@ fn procedural_terrain(
     });
     commands.insert_resource(GroundMaterialSettings::new(weight_map));
     commands.insert_resource(CurrentHeightMap(heightmap));
+}
+
+fn procedural_terrain(
+    mut commands: Commands, 
+    mut meshes: ResMut<Assets<Mesh>>, 
+    mut materials: ResMut<Assets<StandardMaterial>>, 
+    algorithm: Res<TerrainAlgorithm>,
+    terrain_detail: Res<TerrainTextureDetail>,
+    mut images: ResMut<Assets<Image>>,
+    asset_server: Res<AssetServer>,
+    player_data: Query<&mut Transform, With<Player>>,
+    mut chunks: ResMut<LoadedChunks>,
+    render_dist: Res<RenderDistance>,
+) {
+    let Ok(player_transform) = player_data.single() else {
+        return;
+    };
+    let offset = 128.0;
+    let play_grid_x = (player_transform.translation.x / offset).round() as i32;
+    let play_grid_z = (player_transform.translation.z / offset).round() as i32;
+    for dx in -render_dist.0..=render_dist.0 {
+        for dz in -render_dist.0..=render_dist.0 {
+            let chunk_pos = IVec2::new(play_grid_x + dx, play_grid_z + dz);
+            if !chunks.chunks.contains_key(&chunk_pos) {
+                let world_x = chunk_pos.x as f32 * offset;
+                let world_z = chunk_pos.y as f32 * offset;
+                let chunk_entity = commands.spawn(Name::new(format!("Chunk {}, {}", chunk_pos.x, chunk_pos.y))).id();
+                chunks.chunks.insert(chunk_pos, chunk_entity);
+                procedural_terrain_setup(commands, meshes, materials, algorithm, terrain_detail, images, asset_server, world_x, world_z);
+            }
+            return;
+        }
+    }
 }
 
 fn despawn_ray(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut DespawnTimer)>) {
@@ -1870,7 +1914,7 @@ fn shooting(
         camera_ray.direction, 
         max_range, 
         true, 
-        &SpatialQueryFilter::from_excluded_entities([shooter_entity]) // Don't shoot yourself!
+        &SpatialQueryFilter::from_excluded_entities([shooter_entity])
     ) {
         camera_ray.origin + *camera_ray.direction * hit.distance
     } else {
@@ -1923,61 +1967,36 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
     }
 }
 
-fn terrain_detail_setup(terrain_type: i32, asset_server: &AssetServer) -> StandardMaterial {
-    let mut biome = rand::rng().random_range(1..3);
-    let base_dir = String::new();
-    match biome {
-        1 => {
-            base_dir = format!("CliffSide/textures");
-        },
-        2 => {
-            base_dir = format!("RockyTerrain/textures");
-        },
-        3 => {
-            base_dir = format!("Snow/textures");
-        },
-        _ => {
-            base_dir = format!("CliffSide/textures");
-        }
-    }
-    match terrain_type {
-        0 => {
-            StandardMaterial {
-                base_color_texture: Some(asset_server.load("textures/CliffSide/cliff_side_diff_4k.png")),
-                normal_map_texture: Some(asset_server.load("textures/CliffSide/cliff_side_nor_gl_4k.png")),
-                occlusion_texture: Some(asset_server.load("textures/CliffSide/cliff_side_ao_4k.png")),
-                perceptual_roughness_texture: Some(asset_server.load("textures/CliffSide/cliff_side_rough_4k.png")),
-                displacement_texture: Some(asset_server.load("textures/CliffSide/cliff_side_disp_4k.png")),
-                displacement_scale: 0.5,
-                ..Default::default()
+fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &AssetServer) -> StandardMaterial {
+    let (folder, prefix, parallax_scale) = match terrain_type {
+        0 => ("CliffSide", "cliff_side", 0.5),
+        1 => ("RockyTerrain", "rocky_terrain", 0.5),
+        2 => ("Snow", "snow_01", 0.2),
+        _ => ("CliffSide", "cliff_side", 0.5),
+    };
+    let (quality_str, res_suffix) = match quality {
+        0 => ("Low", "1k"),
+        1 => ("Medium", "2k"),
+        2 => ("High", "4k"),
+        _ => ("High", "4k"),
+    };
+    let base_dir = format!("Environment/{}/{}/textures", quality_str, folder);
+    let load_16bit_grayscale = |file_path: String| {
+        asset_server.load_with_settings(
+            file_path,
+            |settings: &mut ImageLoaderSettings| {
+                settings.texture_format = Some(TextureFormat::R16Unorm);
             }
-        },
-        1 => {
-            StandardMaterial {
-                base_color_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_diff_4k.png")),
-                normal_map_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_nor_gl_4k.png")),
-                occlusion_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_ao_4k.png")),
-                perceptual_roughness_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_rough_4k.png")),
-                displacement_texture: Some(asset_server.load("textures/RockyTerrain/rocky_terrain_disp_4k.png")),
-                displacement_scale: 0.5,
-                ..Default::default()
-            }
-        },
-        2 => {
-            StandardMaterial {
-                base_color_texture: Some(asset_server.load("textures/Snow/snow_01_diff_4k.png")),
-                normal_map_texture: Some(asset_server.load("textures/Snow/snow_01_nor_gl_4k.png")),
-                occlusion_texture: Some(asset_server.load("textures/Snow/snow_01_ao_4k.png")),
-                perceptual_roughness_texture: Some(asset_server.load("textures/Snow/snow_01_rough_4k.png")),
-                displacement_texture: Some(asset_server.load("textures/Snow/snow_01_disp_4k.png")),
-                displacement_scale: 0.2, // Snow usually has less extreme displacement than rock
-                ..Default::default()
-            }
-        },
-        _ => StandardMaterial {
-            base_color: Color::WHITE,
-            ..Default::default()
-        }
+        )
+    };
+    StandardMaterial {
+        base_color_texture: Some(asset_server.load(format!("{}/{}_diff_{}.png", base_dir, prefix, res_suffix))),
+        normal_map_texture: Some(asset_server.load(format!("{}/{}_nor_gl_{}.png", base_dir, prefix, res_suffix))),
+        occlusion_texture: Some(load_16bit_grayscale(format!("{}/{}_ao_{}.png", base_dir, prefix, res_suffix))),
+        metallic_roughness_texture: Some(load_16bit_grayscale(format!("{}/{}_rough_{}.png", base_dir, prefix, res_suffix))),
+        depth_map: Some(load_16bit_grayscale(format!("{}/{}_disp_{}.png", base_dir, prefix, res_suffix))),
+        parallax_depth_scale: parallax_scale,
+        ..Default::default()
     }
 }
 
@@ -2163,6 +2182,7 @@ fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<
         if *interaction == Interaction::Pressed {
             println!("Settings applied!");
             terrain_detail.enabled = terrain_menu.index as i32;
+            terrain_detail.quality = menu.index;
             match menu.index {
                 0 => {
                     player_model.model_name = "Player/Player.glb".to_string();
@@ -2248,6 +2268,7 @@ fn main() {
         .init_resource::<SelectedWeapon>()
         .init_resource::<BotConfig>()
         .init_resource::<AimDistance>()
+        .insert_resource(RenderDistance { 0: 1 })
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
         .insert_resource(CameraDashEffect { active_multiplier: 1.0 })
@@ -2265,7 +2286,7 @@ fn main() {
             options: vec!["Cliff Side".to_string(), "Rocky Terrain".to_string(), "Snow".to_string()],
             index: 0,
         })
-        .insert_resource(TerrainTextureDetail { enabled: 0 })
+        .insert_resource(TerrainTextureDetail { enabled: 0, quality: 0 })
         .insert_resource(PlayerModel {
             model_name: "Player/Player.glb".to_string()
         })
