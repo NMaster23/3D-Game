@@ -139,6 +139,9 @@ struct SelectedWeapon {
 }
 
 #[derive(Component)]
+struct LoadingScreenImage;
+
+#[derive(Component)]
 struct MainMenuUi;
 
 #[derive(Component)]
@@ -219,8 +222,9 @@ struct ImpactEffects {
 pub enum AppState {
     #[default]
     MainMenu,
+    Loading,
     InGame,
-    GameOver
+    GameOver,
 }
 
 #[derive(Resource)]
@@ -323,6 +327,9 @@ pub enum TerrainAlgorithm {
 
 #[derive(Component)]
 struct RestartButton;
+
+#[derive(Component)]
+pub struct TerrainCollider;
 
 #[derive(Component, Resource)]
 pub struct CurrentHeightMap(pub HeightMap);
@@ -539,7 +546,7 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
                 ));
                 timer.0.reset();
                 if current_weapon == 2 {
-                    let shot_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).handle();
+                    let shot_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).with_volume(3.0).handle();
                     commands.spawn((
                         Transform::from_translation(hit_point),
                         SpatialAudioEmitter {
@@ -813,7 +820,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         LinearDamping(2.0),
         SceneRoot(player_model),
         Collider::capsule(1.0, 0.5),
-        Transform::from_xyz(0.0, 500.0, 0.0),
+        Transform::from_xyz(0.0, 160.0, 0.0),
         PlayerData {
             health: 100,
             player_name: "None".into(),
@@ -867,7 +874,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
                 footstep_timer: Timer::from_seconds(0.7, TimerMode::Repeating),
             },
             IsBot,
-            Transform::from_xyz(bots.bot_offset, 500.0, -5.0),
+            Transform::from_xyz(bots.bot_offset, 160.0, -5.0),
             CharacterController {
                 move_direction: Vec3::ZERO,
             },
@@ -1029,6 +1036,7 @@ fn procedural_terrain_setup(
         collider,
         RigidBody::Static,
         Transform::from_xyz(128.0, 0.0, 128.0), 
+        TerrainCollider,
     )).id();
     
     commands.entity(chunk_entity).add_child(col_entity);
@@ -1243,7 +1251,7 @@ fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashE
             let dash_velocity = (transform.rotation * move_direction).normalize_or_zero() * dash_power;
             linear_velocity.x = dash_velocity.x;
             linear_velocity.z = dash_velocity.z;
-            let dash_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).handle();
+            let dash_sound = audio.play(asset_server.load("Player/Rocket_Explode.ogg")).with_volume(3.0).handle();
             commands.spawn((
                 Transform::from_translation(transform.translation),
                 SpatialAudioEmitter { instances: vec![dash_sound] },
@@ -1946,7 +1954,7 @@ fn shooting(
         3 => "Player/Rocket.ogg",
         _ => "Player/Pistol.ogg",
     };
-    let shot_sound = audio.play(asset_server.load(sound)).handle();
+    let shot_sound = audio.play(asset_server.load(sound)).with_volume(3.0).handle();
     commands.spawn((
         Transform::from_translation(player_transform.translation),
         SpatialAudioEmitter {
@@ -2246,7 +2254,7 @@ fn settings_menu(
 ) {
     for interaction in q_start.iter() {
         if *interaction == Interaction::Pressed {
-            state.set(AppState::InGame);
+            state.set(AppState::Loading);
         }
     }
     
@@ -2318,7 +2326,7 @@ fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<
             for entity in q_main_menu.iter() {
                 commands.entity(entity).despawn();
             }
-            state.set(AppState::InGame);
+            state.set(AppState::Loading);
         }
     }
 }
@@ -2329,6 +2337,45 @@ fn main_menu_handling(mut commands: Commands, query: Query<Entity, With<MainMenu
     }
     for entity in camera_query.iter() {
         commands.entity(entity).despawn();
+    }
+}
+
+fn load_to_ground(
+    mut query: Query<&CollidingEntities, With<Player>>,
+    terrain_query: Query<(), With<TerrainCollider>>,
+    loading_screen: Query<Entity, With<LoadingScreenImage>>,
+    mut app_state: ResMut<NextState<AppState>>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+    mut spawned: Local<bool>,
+    mut finished: Local<bool>,
+) {
+    let loading: Handle<Image> = asset_server.load("Loading.jpg");
+    if *finished {
+        app_state.set(AppState::InGame);
+        println!("Loading finished!");
+    }
+    if !*spawned {
+        commands.spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                ..Default::default()
+            },
+            ImageNode::new(loading),
+            ZIndex(100),
+            LoadingScreenImage,
+        ));
+        *spawned = true;
+    }
+    let Ok(colliding_entities) = query.single_mut() else { return; };
+    let is_grounded = colliding_entities.iter().any(|&e| terrain_query.contains(e));
+    if is_grounded {
+        for entity in &loading_screen {
+            commands.entity(entity).despawn();
+        }
+        *finished = true;
     }
 }
 
@@ -2409,13 +2456,24 @@ fn main() {
         })
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -14.0, 0.0))) 
+        .add_systems(
+            Update, 
+            (load_to_ground, procedural_terrain).run_if(in_state(AppState::Loading))
+        )
         .add_systems(OnEnter(AppState::GameOver), game_over)
         .add_systems(Update, restart_handling.run_if(in_state(AppState::GameOver)))
+        .add_systems(
+            OnEnter(AppState::Loading), 
+            (spawn_player, setup, bot_spawn, weapon_selector_setup)
+        )
         .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
         .add_systems(Update, (settings_menu, cycle_menu, bot_num_menu, render_dist_menu, terrain_menu_handling, settings_apply).run_if(in_state(AppState::MainMenu)))
         .add_systems(OnExit(AppState::MainMenu), main_menu_handling)
         .add_systems(Startup, setup_impact_effects)
-        .add_systems(OnEnter(AppState::InGame), (spawn_player, setup, bot_spawn, jump_indicator, health_bar, sprint_bar, weapon_selector_setup))
+        .add_systems(
+            OnEnter(AppState::InGame), 
+            (jump_indicator, health_bar, sprint_bar)
+        )
         .add_systems(
             Update,
             (
