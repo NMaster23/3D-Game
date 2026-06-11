@@ -145,6 +145,9 @@ struct LoadingScreenImage;
 struct MainMenuUi;
 
 #[derive(Component)]
+struct InGameUi;
+
+#[derive(Component)]
 struct StartButton;
 
 #[derive(Component)]
@@ -659,6 +662,7 @@ fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndic
             right: Val::Px(30.0),
             ..Default::default()
         },
+        InGameUi,
         ZIndex(10),
     ));
 }
@@ -681,6 +685,7 @@ fn health_bar(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>
             progress: 1.0,
             color: LinearRgba::new(0.2, 0.8, 0.2, 1.0),
         },
+        InGameUi,
         ZIndex(10),
     ));
 }
@@ -704,6 +709,7 @@ fn sprint_bar(mut commands: Commands, mut materials: ResMut<Assets<SprintBarUI>>
             progress: 1.0,
             color: LinearRgba::new(0.2, 0.6, 1.0, 1.0),
         },
+        InGameUi,
         ZIndex(10),
     ));
 }
@@ -763,6 +769,7 @@ fn weapon_selector_setup(mut commands: Commands, mut materials: ResMut<Assets<We
             ..Default::default()
         },
         ui_material,
+        InGameUi,
         ZIndex(10),
     ));
 }
@@ -817,7 +824,6 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         GlobalTransform::default(),
         Player,
         RigidBody::Dynamic,
-        LinearDamping(2.0),
         SceneRoot(player_model),
         Collider::capsule(1.0, 0.5),
         Transform::from_xyz(0.0, 160.0, 0.0),
@@ -1353,6 +1359,7 @@ fn setup(
             ..default()
         },
         RelativeCursorPosition::default(),
+        InGameUi,
     )).with_children(|parent| {
         parent.spawn((
             ImageNode::new(asset_server.load("crosshair.png")),
@@ -2341,21 +2348,18 @@ fn main_menu_handling(mut commands: Commands, query: Query<Entity, With<MainMenu
 }
 
 fn load_to_ground(
-    mut query: Query<&CollidingEntities, With<Player>>,
+    query: Query<&CollidingEntities, With<Player>>,
     terrain_query: Query<(), With<TerrainCollider>>,
     loading_screen: Query<Entity, With<LoadingScreenImage>>,
     mut app_state: ResMut<NextState<AppState>>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
     mut spawned: Local<bool>,
-    mut finished: Local<bool>,
+    mut timer: Local<f32>,
+    time: Res<Time>,
 ) {
-    let loading: Handle<Image> = asset_server.load("Loading.jpg");
-    if *finished {
-        app_state.set(AppState::InGame);
-        println!("Loading finished!");
-    }
     if !*spawned {
+        let loading: Handle<Image> = asset_server.load("Loading.jpg");
         commands.spawn((
             Node {
                 width: Val::Percent(100.0),
@@ -2369,13 +2373,19 @@ fn load_to_ground(
         ));
         *spawned = true;
     }
-    let Ok(colliding_entities) = query.single_mut() else { return; };
-    let is_grounded = colliding_entities.iter().any(|&e| terrain_query.contains(e));
-    if is_grounded {
+    *timer += time.delta_secs();
+    if !terrain_query.is_empty() && *timer > 0.5 {
         for entity in &loading_screen {
             commands.entity(entity).despawn();
         }
-        *finished = true;
+        app_state.set(AppState::InGame);
+        println!("Loading finished!");
+    }
+}
+
+fn despawn_in_game_ui(mut commands: Commands, query: Query<Entity, With<InGameUi>>) {
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
     }
 }
 
@@ -2460,7 +2470,7 @@ fn main() {
             Update, 
             (load_to_ground, procedural_terrain).run_if(in_state(AppState::Loading))
         )
-        .add_systems(OnEnter(AppState::GameOver), game_over)
+        .add_systems(OnEnter(AppState::GameOver), (game_over, despawn_in_game_ui))
         .add_systems(Update, restart_handling.run_if(in_state(AppState::GameOver)))
         .add_systems(
             OnEnter(AppState::Loading), 
