@@ -230,6 +230,9 @@ pub enum AppState {
     GameOver,
 }
 
+#[derive(Component)]
+struct GameOverUi;
+
 #[derive(Resource)]
 struct CycleMenu {
     pub options: Vec<String>,
@@ -617,22 +620,26 @@ fn botdead(mut asset_server: ResMut<AssetServer>, player_data: Query<&mut Transf
     }
 }
 
-fn game_restart() {
-    let current = env::current_exe().unwrap();
-    Command::new(current).spawn().expect("Restart Failed");
-    std::process::exit(0);
-}
-
 fn game_over(mut commands: Commands, asset_server: Res<AssetServer>, mut cursor: Single<&mut CursorOptions, With<Window>>) {
     cursor.grab_mode = CursorGrabMode::None;
     cursor.visible = true;
-    let game_over: Handle<Image> = asset_server.load("GameOver.png");
     commands.spawn((
-        Node::default(),
-        NodeStyleSheet::new(asset_server.load("menu/main_menu.css")),
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        NodeStyleSheet::new(asset_server.load("menu/game_over.css")),
+        GameOverUi,
         children![
-            (Node::default(), Name::new("game_menu"), children![
-                (ImageNode::new(game_over), Node::default()),
+            (Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                }, Name::new("game_menu"), children![
                 (Button, RestartButton, Node::default(), children![(Text::new("Play Again"), Node::default())]),
                 (Node::default(), Name::new("floating_borders"))
             ]),
@@ -640,12 +647,23 @@ fn game_over(mut commands: Commands, asset_server: Res<AssetServer>, mut cursor:
     ));
 }
 
-fn restart_handling(query: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>) {
+fn restart_handling(query: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>, mut state: ResMut<NextState<AppState>>) {
     for interaction in query.iter() {
         if *interaction == Interaction::Pressed {
-            game_restart();
+            state.set(AppState::MainMenu);
         }
     }
+}
+
+fn cleanup_game_session(
+    mut commands: Commands,
+    query: Query<Entity, Or<(With<Player>, With<Bots>, With<CurrentHeightMap>, With<PointLight>, With<Camera3d>, With<GameOverUi>, With<ProjectileFlashEffect>)>>,
+    mut chunks: ResMut<LoadedChunks>,
+) {
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+    chunks.chunks.clear();
 }
 
 fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndicator>>) {
@@ -2100,7 +2118,12 @@ fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
                 (Text::new("Mech Game".to_string()), Name::new("menu_title"), Node::default()),
                 (Button, StartButton, Node::default(), children![(Text::new("Start"), Node::default())]),
                 (Button, SettingsButton, Node::default(), children![(Text::new("Settings"), Node::default())]),
-                (Node::default(), Name::new("floating_borders"))
+                (Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                }, Name::new("floating_borders"))
             ]),
         ],
     ));
@@ -2287,9 +2310,9 @@ fn settings_menu(
                         (Button, NextButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
                     ]),
                     (Node { flex_direction: FlexDirection::Row, ..default() }, Name::new("render_dist_cycle_container"), children![
-                        (Button, PrevButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
+                        (Button, PrevRenderDistNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
                         (Text::new(format!("{} Chunks (Render Distance)", render_dist.num)), Name::new("render_dist_cycle_text"), RenderDistTarget, Node::default()),
-                        (Button, NextButtonBotNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
+                        (Button, NextRenderDistNum, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new(">"), Node::default())]),
                     ]),
                     (Node { flex_direction: FlexDirection::Row, ..default() }, Name::new("terrain_cycle_container"), children![
                         (Button, PrevTerrainButton, Node { width: Val::Px(40.0), height: Val::Px(40.0), ..default() }, children![(Text::new("<"), Node::default())]),
@@ -2379,6 +2402,8 @@ fn load_to_ground(
             commands.entity(entity).despawn();
         }
         app_state.set(AppState::InGame);
+        *spawned = false;
+        *timer = 0.0;
         println!("Loading finished!");
     }
 }
@@ -2466,6 +2491,7 @@ fn main() {
         })
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -14.0, 0.0))) 
+        .add_systems(OnExit(AppState::GameOver), cleanup_game_session)
         .add_systems(
             Update, 
             (load_to_ground, procedural_terrain).run_if(in_state(AppState::Loading))
