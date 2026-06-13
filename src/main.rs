@@ -19,6 +19,7 @@ use bevy_symbios_texture::{
 use bevy::render::render_resource::{Extent3d, TextureDimension};
 use bevy::asset::RenderAssetUsages;
 use noise::{NoiseFn, Fbm, SuperSimplex};
+use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 
 #[derive(Component)]
 pub struct Lighting;
@@ -1049,7 +1050,7 @@ fn procedural_terrain_setup(
             let vertex_world_x = x - 128.0 + local_x as f32;
             let vertex_world_z = z - 128.0 + local_z as f32;
             let raw_noise = fbm.get([vertex_world_x as f64, vertex_world_z as f64]) as f32;
-            let normalized_height = (raw_noise + 1.0) * 0.5;
+            let normalized_height = ((raw_noise + 1.0) * 0.5).powf(1.5) * 100.0;
             let index = (local_z * 257 + local_x) as usize;
             heightmap.data_mut()[index] = normalized_height;
         }
@@ -1060,18 +1061,17 @@ fn procedural_terrain_setup(
     };
     let mut mesh = HeightMapMeshBuilder::new()
         .with_normal_method(normal_algorithm.into())
-        .with_uv_tile_size(32.0)
+        .with_uv_tile_size(256.0)
         .build(&heightmap);
     if let Err(e) = mesh.generate_tangents() {
         println!("Failed to generate tangents: {}", e);
     }
     let collider = build_heightfield_collider(&heightmap);
-    let terrain_material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, images);
-    let scale = Vec3::new(1.0, 50.0, 1.0);
+    let scale = Vec3::new(1.0, 100.0, 1.0);
     commands.entity(chunk_entity).insert((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(material_cache.0.clone()),
-        Transform::from_xyz(x - 128.0, 0.0, z - 128.0).with_scale(scale),
+        Transform::from_xyz(x - 128.0, 0.0, z - 128.0),
         CurrentHeightMap(heightmap.clone()),
     ));
     let col_entity = commands.spawn((
@@ -1083,11 +1083,6 @@ fn procedural_terrain_setup(
     )).id();
     
     commands.entity(chunk_entity).add_child(col_entity);
-    let weight_map = SplatMapper::default().generate(&heightmap);
-    let image = splat_to_image(&weight_map);
-    commands.insert_resource(SplatTexture { handle: images.add(image) });
-    commands.insert_resource(GroundMaterialSettings::new(weight_map));
-    commands.insert_resource(CurrentHeightMap(heightmap));
 }
 
 fn procedural_terrain(
@@ -1392,9 +1387,8 @@ fn setup(
     asset_server: Res<AssetServer>,
     terrain_detail: Res<TerrainTextureDetail>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
 ) {
-    let material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, &mut images);
+    let material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, &asset_server);
     commands.insert_resource(TerrainMaterial(materials.add(material)));
     commands.spawn((
         Node {
@@ -1418,7 +1412,7 @@ fn setup(
         ));
     });
     let sky = asset_server.load("Environment/Sky.ktx2");
-    let skybox_brightness = if graphics.enabled { 1500.0 } else { 350.0 };
+    let skybox_brightness = 350.0;
     let mut camera = commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -1473,6 +1467,10 @@ fn setup(
             aperture_f_stops: 2.8,
             max_circle_of_confusion_diameter: 64.0,
             max_depth: 1000.0,
+        })
+        .insert(AmbientLight {
+            brightness: 2000.0,
+            ..Default::default()
         });
     }
     commands.spawn(Node {
@@ -1489,7 +1487,7 @@ fn setup(
             shadows_enabled: true,
             ..default()
         },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -PI / 4.0, -PI / 4.0, 0.0)),
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -PI / 4.0, PI / 2.0, 0.0)),
         CascadeShadowConfigBuilder {
             num_cascades: 4,
             minimum_distance: 0.1,
@@ -2076,61 +2074,65 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
     }
 }
 
-fn terrain_detail_setup(terrain_type: i32, quality: usize, images: &mut Assets<Image>) -> StandardMaterial {
-    let resolution = match quality {
-        0 => 512,
-        1 => 1024,
-        2 => 2048,
-        _ => 1024,
+fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &AssetServer) -> StandardMaterial {
+    let quality_str_folder = match quality {
+        0 => "Low",
+        1 => "Medium",
+        2 => "High",
+        _ => "Medium",
     };
-    let config = match terrain_type {
-        2 => GroundConfig {
-            seed: 42,
-            color_dry: [0.85, 0.9, 0.95],
-            color_moist: [0.65, 0.75, 0.85], 
+    let quality_str_file = match quality {
+        0 => "1k",
+        1 => "2k",
+        2 => "4k",
+        _ => "2k",
+    };
+
+    let (terrain_folder, terrain_prefix) = match terrain_type {
+        0 => ("CliffSide", "cliff_side"),
+        1 => ("RockyTerrain", "rocky_terrain"),
+        2 => ("Snow", "snow_01"),
+        _ => ("CliffSide", "cliff_side"),
+    };
+
+    let diff_path = format!("Environment/{}/{}/textures/{}_diff_{}.png", quality_str_folder, terrain_folder, terrain_prefix, quality_str_file);
+    let normal_path = format!("Environment/{}/{}/textures/{}_nor_gl_{}.png", quality_str_folder, terrain_folder, terrain_prefix, quality_str_file);
+    let arm_path = format!("Environment/{}/{}/textures/{}_arm_{}.png", quality_str_folder, terrain_folder, terrain_prefix, quality_str_file);
+
+    let albedo_handle = asset_server.load_with_settings(diff_path, |settings: &mut ImageLoaderSettings| {
+        settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            address_mode_w: ImageAddressMode::Repeat,
             ..Default::default()
-        },
-        _ => GroundConfig {
-            seed: 42,
-            macro_scale: 4.0,
-            micro_scale: 12.0,
+        });
+    });
+
+    let normal_handle = asset_server.load_with_settings(normal_path, |settings: &mut ImageLoaderSettings| {
+        settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            address_mode_w: ImageAddressMode::Repeat,
             ..Default::default()
-        },
-    };
-    let texture_map: TextureMap = GroundGenerator::new(config)
-        .generate(resolution as u32, resolution as u32)
-        .expect("Failed to generate terrain textures");
-    let make_image = |data: Vec<u8>, is_srgb: bool| -> Image {
-        let extent = Extent3d {
-            width: resolution as u32,
-            height: resolution as u32,
-            depth_or_array_layers: 1,
-        };
-        let expected_pixels = (resolution * resolution) as usize;
-        let format = if data.len() == expected_pixels * 4 {
-            if is_srgb { TextureFormat::Rgba8UnormSrgb } else { TextureFormat::Rgba8Unorm }
-        } else if data.len() == expected_pixels * 2 {
-            TextureFormat::Rg8Unorm
-        } else {
-            TextureFormat::R8Unorm
-        };
-        Image::new(
-            extent,
-            TextureDimension::D2,
-            data,
-            format,
-            RenderAssetUsages::default(),
-        )
-    };
-    let albedo_handle = images.add(make_image(texture_map.albedo, true));
-    let normal_handle = images.add(make_image(texture_map.normal, false));
-    let roughness_handle = images.add(make_image(texture_map.roughness, false));
+        });
+    });
+
+    let arm_handle = asset_server.load_with_settings(arm_path, |settings: &mut ImageLoaderSettings| {
+        settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            address_mode_w: ImageAddressMode::Repeat,
+            ..Default::default()
+        });
+    });
 
     StandardMaterial {
         base_color_texture: Some(albedo_handle),
         normal_map_texture: Some(normal_handle),
-        metallic_roughness_texture: Some(roughness_handle),
+        metallic_roughness_texture: Some(arm_handle.clone()),
+        occlusion_texture: Some(arm_handle),
         perceptual_roughness: 1.0,
+        alpha_mode: bevy::prelude::AlphaMode::Opaque,
         ..Default::default()
     }
 }
@@ -2372,7 +2374,7 @@ fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<
                 }
                 2 => {
                     player_model.model_name = "Player/Player_Highpoly.glb".to_string();
-                    *algorithm = TerrainAlgorithm::AreaWeighted;
+                    *algorithm = TerrainAlgorithm::Sobel;
                     graphics.enabled = true;
                 }
                 _ => {
@@ -2514,7 +2516,7 @@ fn main() {
         })
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
-            brightness: 10.0,
+            brightness: 300.0,
             ..default()
         })
         .insert_resource(Seed(rand::rng().random_range(1..2147483647)))
