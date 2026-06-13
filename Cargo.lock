@@ -2262,6 +2262,7 @@ dependencies = [
  "bevy_symbios_texture",
  "include_dir",
  "log",
+ "noise",
  "rand 0.10.1",
 ]
 

@@ -18,6 +18,7 @@ use bevy_symbios_texture::{
 };
 use bevy::render::render_resource::{Extent3d, TextureDimension};
 use bevy::asset::RenderAssetUsages;
+use noise::{NoiseFn, Fbm, SuperSimplex};
 
 #[derive(Component)]
 pub struct Lighting;
@@ -258,6 +259,9 @@ struct PlayerModel {
 }
 
 #[derive(Resource)]
+struct TerrainMaterial(Handle<StandardMaterial>);
+
+#[derive(Resource)]
 struct SsaoEnabled {
     pub enabled: bool,
 }
@@ -312,6 +316,9 @@ struct PrevTerrainButton;
 #[derive(Component)]
 struct NextTerrainButton;
 
+#[derive(Resource)]
+struct Seed(u32);
+
 #[derive(Component)]
 struct TerrainTextTarget;
 
@@ -336,6 +343,9 @@ struct RestartButton;
 
 #[derive(Component)]
 pub struct TerrainCollider;
+
+#[derive(Component)]
+struct DmgNumbers;
 
 #[derive(Component, Resource)]
 pub struct CurrentHeightMap(pub HeightMap);
@@ -381,7 +391,7 @@ impl UiMaterial for WeaponSelectorUI {
 impl Default for BotConfig {
     fn default() -> Self {
         Self {
-            accuracy_range: 1..15,
+            accuracy_range: 1..5,
             disruptor_timer: Timer::from_seconds(5.0, TimerMode::Once),
             is_disrupted: false,
         }
@@ -534,6 +544,7 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
                 commands.spawn((
                     Text::new(format!("-{}", final_damage)),
                     TextColor(Color::srgb(1.0, 0.2, 0.2)),
+                    DmgNumbers,
                     TextFont {
                         font_size: 32.0,
                         ..Default::default()
@@ -657,13 +668,15 @@ fn restart_handling(query: Query<&Interaction, (Changed<Interaction>, With<Resta
 
 fn cleanup_game_session(
     mut commands: Commands,
-    query: Query<Entity, Or<(With<Player>, With<Bots>, With<CurrentHeightMap>, With<PointLight>, With<Camera3d>, With<GameOverUi>, With<ProjectileFlashEffect>)>>,
+    query: Query<Entity, Or<(With<Player>, With<Bots>, With<CurrentHeightMap>, With<PointLight>, With<Camera3d>, With<GameOverUi>, With<ProjectileFlashEffect>, With<DmgNumbers>)>>,
     mut chunks: ResMut<LoadedChunks>,
+    mut selected_weapon: ResMut<SelectedWeapon>,
 ) {
     for entity in query.iter() {
         commands.entity(entity).despawn();
     }
     chunks.chunks.clear();
+    selected_weapon.id = 1;
 }
 
 fn jump_indicator(mut commands: Commands, mut materials: ResMut<Assets<JumpIndicator>>) {
@@ -958,9 +971,9 @@ fn bot_handling(
                     ray.direction, 
                     max_range,
                     true,
-                    &SpatialQueryFilter::default()
+                    &SpatialQueryFilter::from_excluded_entities([e])
                 ) else {
-                    break;
+                    continue;
                 };
                 let hit_number = 1;
                 let hit_chance = rand::rng().random_range(bot_config.accuracy_range.clone());
@@ -968,10 +981,10 @@ fn bot_handling(
                     let (hit_entity, hit_data) = (hits.entity, hits); {
                         total_length += hit_data.distance;
                         if total_length > max_range {
-                            break;
+                            continue;
                         }
                         if hit_data.distance > 30.0 {
-                            break;
+                            continue;
                         }
                         let mut current_entity = hit_entity;
                         let mut hit_self = false;
@@ -1004,7 +1017,6 @@ fn bot_handling(
                                 color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
                             });
                         }
-                        break;
                     }
                 }
             }
@@ -1023,17 +1035,24 @@ fn procedural_terrain_setup(
     x: f32,
     z: f32,
     chunk_entity: Entity,
+    seed: u32,
+    material_cache: &TerrainMaterial,
 ) {
-    let seed = rand::rng().random_range(1..2147483647);
-    let mut heightmap = HeightMap::new(256, 256, 1.0);
-    FbmNoise::new(seed).generate(&mut heightmap);
-    heightmap.normalize();
-    for val in heightmap.data_mut().iter_mut() {
-        let base = *val;
-        let ridges = 1.0 - (base * 2.0 - 1.0).abs();
-        let steep_peaks = ridges * ridges;
-        let mixed = (base * 0.4) + (steep_peaks * 0.6);
-        *val = mixed.powf(1.8); 
+    let mut fbm = Fbm::<SuperSimplex>::new(seed);
+    fbm.octaves = 4;
+    fbm.frequency = 0.01;
+    fbm.persistence = 0.5;
+    fbm.lacunarity = 2.0;
+    let mut heightmap = HeightMap::new(257, 257, 1.0);
+    for local_z in 0..257 {
+        for local_x in 0..257 {
+            let vertex_world_x = x - 128.0 + local_x as f32;
+            let vertex_world_z = z - 128.0 + local_z as f32;
+            let raw_noise = fbm.get([vertex_world_x as f64, vertex_world_z as f64]) as f32;
+            let normalized_height = (raw_noise + 1.0) * 0.5;
+            let index = (local_z * 257 + local_x) as usize;
+            heightmap.data_mut()[index] = normalized_height;
+        }
     }
     let normal_algorithm = match algorithm {
         TerrainAlgorithm::AreaWeighted => NormalMethod::AreaWeighted,
@@ -1048,10 +1067,10 @@ fn procedural_terrain_setup(
     }
     let collider = build_heightfield_collider(&heightmap);
     let terrain_material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, images);
-    let scale = Vec3::new(1.0, 150.0, 1.0);
+    let scale = Vec3::new(1.0, 50.0, 1.0);
     commands.entity(chunk_entity).insert((
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(materials.add(terrain_material)),
+        MeshMaterial3d(material_cache.0.clone()),
         Transform::from_xyz(x - 128.0, 0.0, z - 128.0).with_scale(scale),
         CurrentHeightMap(heightmap.clone()),
     ));
@@ -1059,7 +1078,7 @@ fn procedural_terrain_setup(
         Name::new("Physics Collider"),
         collider,
         RigidBody::Static,
-        Transform::from_xyz(128.0, 0.0, 128.0), 
+        Transform::from_xyz(128.0, 0.0, 128.0),
         TerrainCollider,
     )).id();
     
@@ -1082,6 +1101,8 @@ fn procedural_terrain(
     player_data: Query<&mut Transform, With<Player>>,
     mut chunks: ResMut<LoadedChunks>,
     render_dist: Res<RenderDistance>,
+    seed: Res<Seed>,
+    material_cache: Res<TerrainMaterial>,
 ) {
     let Ok(player_transform) = player_data.single() else {
         return;
@@ -1107,7 +1128,9 @@ fn procedural_terrain(
                     &asset_server,
                     world_x, 
                     world_z,
-                    chunk_entity
+                    chunk_entity,
+                    seed.0,
+                    &material_cache,
                 );
             }
         }
@@ -1367,7 +1390,12 @@ fn setup(
     mut commands: Commands,
     graphics: Res<SsaoEnabled>,
     asset_server: Res<AssetServer>,
+    terrain_detail: Res<TerrainTextureDetail>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
+    let material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, &mut images);
+    commands.insert_resource(TerrainMaterial(materials.add(material)));
     commands.spawn((
         Node {
             width: Val::Percent(100.0),
@@ -2489,6 +2517,7 @@ fn main() {
             brightness: 10.0,
             ..default()
         })
+        .insert_resource(Seed(rand::rng().random_range(1..2147483647)))
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(Gravity(Vec3::new(0.0, -14.0, 0.0))) 
         .add_systems(OnExit(AppState::GameOver), cleanup_game_session)
