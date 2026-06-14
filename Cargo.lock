@@ -1677,9 +1677,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_symbios_texture"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f167a6d5786bb58ec7c86214bee673298ef32ae17ff08156bb30f6d616f3abd3"
+checksum = "0481af0a13c630347cb6d74fa88302d3a3e3c628876ad3dad4f1fdeb29374278"
 dependencies = [
  "bevy",
  "noise",

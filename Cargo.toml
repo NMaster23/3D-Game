@@ -14,7 +14,7 @@ bevy_flair = "0.7.0"
 bevy_hanabi = "0.18.0"
 bevy_kira_audio = { version = "0.25.0", features = ["ogg"] }
 bevy_symbios_ground = { version = "0.3.0", features = ["physics"] }
-bevy_symbios_texture = "0.4.0"
+bevy_symbios_texture = "0.6.0"
 include_dir = "0.7.4"
 log = { version = "0.4.32", features = ["max_level_debug", "release_max_level_warn"] }
 noise = "0.9.0"
