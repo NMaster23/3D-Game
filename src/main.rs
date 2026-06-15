@@ -17,7 +17,8 @@ use bevy_symbios_texture::{
     rock::{RockConfig, RockGenerator},
     snow::{SnowConfig, SnowGenerator},
 };
-
+use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::asset::RenderAssetUsages;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -1039,16 +1040,16 @@ fn procedural_terrain_setup(
 ) {
     let mut fbm = Fbm::<SuperSimplex>::new(seed);
     fbm.octaves = 4;
-    fbm.frequency = 0.01;
+    fbm.frequency = 0.005;
     fbm.persistence = 0.5;
-    fbm.lacunarity = 2.0;
+    fbm.lacunarity = 2.25;
     let mut heightmap = HeightMap::new(257, 257, 1.0);
     for local_z in 0..257 {
         for local_x in 0..257 {
             let vertex_world_x = x - 128.0 + local_x as f32;
             let vertex_world_z = z - 128.0 + local_z as f32;
             let raw_noise = fbm.get([vertex_world_x as f64, vertex_world_z as f64]) as f32;
-            let normalized_height = ((raw_noise + 1.0) * 0.5).powf(1.5) * 100.0;
+            let normalized_height = ((raw_noise + 1.0) * 0.5).powf(1.5) * 45.0;
             let index = (local_z * 257 + local_x) as usize;
             heightmap.data_mut()[index] = normalized_height;
         }
@@ -1059,7 +1060,7 @@ fn procedural_terrain_setup(
     };
     let mut mesh = HeightMapMeshBuilder::new()
         .with_normal_method(normal_algorithm.into())
-        .with_uv_tile_size(8.0)
+        .with_uv_tile_size(4.0)
         .build(&heightmap);
     if let Err(e) = mesh.generate_tangents() {
         println!("Failed to generate tangents: {}", e);
@@ -1385,9 +1386,8 @@ fn setup(
     asset_server: Res<AssetServer>,
     terrain_detail: Res<TerrainTextureDetail>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
 ) {
-    let material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, &mut images, asset_server);
+    let material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, &asset_server);
     commands.insert_resource(TerrainMaterial(materials.add(material)));
     commands.spawn((
         Node {
@@ -1411,7 +1411,7 @@ fn setup(
         ));
     });
     let sky = asset_server.load("Environment/Sky.ktx2");
-    let skybox_brightness = 350.0;
+    let skybox_brightness = 1000.0;
     let mut camera = commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -2076,94 +2076,67 @@ fn player_death(mut commands: Commands, query: Query<(Entity, &PlayerData), With
     }
 }
 
-fn terrain_detail_setup(terrain_type: i32, quality: usize, images: &mut Assets<Image>, asset_server: Res<AssetServer>) {
-    let res: u32 = match quality {
-        0 => 512,
-        1 => 1024,
-        _ => 2048,
+fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &Res<AssetServer>) -> StandardMaterial {
+    let quality_str = match quality {
+        0 => "1k",
+        1 => "2k",
+        2 => "4k",
+        _ => "1k",
     };
-    let mut base_dir = String::new();
-    let handles = match terrain_type {
-        0 => {
-            base_dir = format!("Environment/{}/textures/cliff_side_", quality);
-            let map = GroundGenerator::new(GroundConfig {
-                seed: 13,
-                macro_scale: 2.0,
-                macro_octaves: 5,
-                micro_scale: 8.0,
-                micro_octaves: 4,
-                micro_weight: 0.35,
-                color_dry: [0.62, 0.46, 0.28],
-                color_moist: [0.34, 0.24, 0.15],
-                normal_strength: 2.0,
-            })
-            .generate(res, res)
-            .expect("valid dimensions");
-            map_to_images(map, images)
-        }
-        1 => {
-            base_dir = format!("Environment/{}/textures/rocky_terrain_", quality);
-            let map = RockGenerator::new(RockConfig {
-                seed: 7,
-                scale: 3.0,
-                octaves: 8,
-                attenuation: 2.0,
-                color_light: [0.42, 0.43, 0.40],
-                color_dark: [0.22, 0.21, 0.19],
-                normal_strength: 4.0,
-            })
-            .generate(res, res)
-            .expect("valid dimensions");
-            map_to_images(map, images)
-        }
-        2 => {
-            base_dir = format!("Environment/{}/textures/snow_01_", quality);
-            let map = SnowGenerator::new(SnowConfig {
-                seed: 73,
-                drift_scale: 2.5,
-                drift_octaves: 4,
-                sparkle_density: 0.08,
-                crust_roughness: 0.85,
-                color_snow: [0.93, 0.95, 0.99],
-                color_shadow: [0.62, 0.70, 0.86],
-                normal_strength: 1.8,
-            })
-            .generate(res, res)
-            .expect("valid dimensions");
-            map_to_images(map, images)
-        }
-        _ => {
-            base_dir = format!("Environment/{}/textures/cliff_side_", quality);
-            let map = GroundGenerator::new(GroundConfig {
-                seed: 13,
-                macro_scale: 2.0,
-                macro_octaves: 5,
-                micro_scale: 8.0,
-                micro_octaves: 4,
-                micro_weight: 0.35,
-                color_dry: [0.62, 0.46, 0.28],
-                color_moist: [0.34, 0.24, 0.15],
-                normal_strength: 2.0,
-            })
-            .generate(res, res)
-            .expect("valid dimensions");
-            map_to_images(map, images)
-        }
+    let quality_dir = match quality {
+        0 => "Low",
+        1 => "Medium",
+        2 => "High",
+        _ => "Low",
     };
-
-    let terrain_material = StandardMaterial {
-        base_color_texture: Some(asset_server.load(format!("{}diff_4k.jpg", base_dir))),
-        normal_map_texture: Some(asset_server.load(format!("{}nor_gl_4k.jpg", base_dir))),
-        metallic_roughness_texture: Some(asset_server.load(format!("{}arm_4k.jpg", base_dir))),
-        occlusion_texture: Some(asset_server.load(format!("{}arm_4k.jpg", base_dir))),
-        depth_map: Some(asset_server.load(format!("{}disp_4k.jpg", base_dir))),
-        parallax_depth_scale: 0.08, 
-        parallax_mapping_method: ParallaxMappingMethod::Relief { max_steps: 16 },
-        perceptual_roughness: 1.0, 
-        metallic: 1.0,
+    let base_dir = match terrain_type {
+        0 => format!("Environment/{}/CliffSide/textures/cliff_side_", quality_dir),
+        1 => format!("Environment/{}/RockyTerrain/textures/rocky_terrain_", quality_dir),
+        2 => format!("Environment/{}/Snow/textures/snow_01_", quality_dir),
+        _ => format!("Environment/{}/CliffSide/textures/cliff_side_", quality_dir),
+    };
+    let color_sampler = |settings: &mut ImageLoaderSettings| {
+        settings.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            address_mode_w: ImageAddressMode::Repeat,
+            ..Default::default()
+        });
+    };
+    let data_sampler = |settings: &mut ImageLoaderSettings| {
+        settings.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        settings.is_srgb = false; // This disables the gamma curve
+        settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            address_mode_w: ImageAddressMode::Repeat,
+            ..Default::default()
+        });
+    };
+    let diff_handle = asset_server.load_with_settings(
+        format!("{}diff_{}.png", base_dir, quality_str), 
+        color_sampler
+    );
+    let normal_handle = asset_server.load_with_settings(
+        format!("{}nor_gl_{}.png", base_dir, quality_str), 
+        data_sampler
+    );
+    
+    let arm_handle = asset_server.load_with_settings(
+        format!("{}arm_{}.png", base_dir, quality_str), 
+        data_sampler
+    );
+    StandardMaterial {
+        base_color_texture: Some(diff_handle),
+        normal_map_texture: Some(normal_handle),
+        flip_normal_map_y: true, 
+        occlusion_texture: Some(arm_handle.clone()),
+        metallic_roughness_texture: Some(arm_handle),
+        anisotropy_strength: 8.0, 
         alpha_mode: AlphaMode::Opaque,
         ..Default::default()
-    };
+    }
 }
 
 fn setup_main_menu(asset_server: Res<AssetServer>, mut commands: Commands) {
@@ -2545,7 +2518,7 @@ fn main() {
         })
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
-            brightness: 10.0,
+            brightness: 100.0,
             ..default()
         })
         .insert_resource(Seed(rand::rng().random_range(1..2147483647)))
