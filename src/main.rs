@@ -17,7 +17,7 @@ use bevy_symbios_texture::{
     rock::{RockConfig, RockGenerator},
     snow::{SnowConfig, SnowGenerator},
 };
-use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::asset::RenderAssetUsages;
 
 #[derive(Component)]
@@ -1060,7 +1060,7 @@ fn procedural_terrain_setup(
     };
     let mut mesh = HeightMapMeshBuilder::new()
         .with_normal_method(normal_algorithm.into())
-        .with_uv_tile_size(4.0)
+        .with_uv_tile_size(32.0)
         .build(&heightmap);
     if let Err(e) = mesh.generate_tangents() {
         println!("Failed to generate tangents: {}", e);
@@ -2083,12 +2083,14 @@ fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &Res<As
         2 => "4k",
         _ => "1k",
     };
+    
     let quality_dir = match quality {
         0 => "Low",
         1 => "Medium",
         2 => "High",
         _ => "Low",
     };
+
     let base_dir = match terrain_type {
         0 => format!("Environment/{}/CliffSide/textures/cliff_side_", quality_dir),
         1 => format!("Environment/{}/RockyTerrain/textures/rocky_terrain_", quality_dir),
@@ -2101,16 +2103,24 @@ fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &Res<As
             address_mode_u: ImageAddressMode::Repeat,
             address_mode_v: ImageAddressMode::Repeat,
             address_mode_w: ImageAddressMode::Repeat,
+            mag_filter: ImageFilterMode::Linear,
+            min_filter: ImageFilterMode::Linear,
+            mipmap_filter: ImageFilterMode::Linear,
+            anisotropy_clamp: 16,
             ..Default::default()
         });
     };
     let data_sampler = |settings: &mut ImageLoaderSettings| {
         settings.asset_usage = RenderAssetUsages::RENDER_WORLD;
-        settings.is_srgb = false; // This disables the gamma curve
+        settings.is_srgb = false;
         settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
             address_mode_u: ImageAddressMode::Repeat,
             address_mode_v: ImageAddressMode::Repeat,
             address_mode_w: ImageAddressMode::Repeat,
+            mag_filter: ImageFilterMode::Linear,
+            min_filter: ImageFilterMode::Linear,
+            mipmap_filter: ImageFilterMode::Linear,
+            anisotropy_clamp: 16,
             ..Default::default()
         });
     };
@@ -2118,6 +2128,7 @@ fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &Res<As
         format!("{}diff_{}.png", base_dir, quality_str), 
         color_sampler
     );
+    
     let normal_handle = asset_server.load_with_settings(
         format!("{}nor_gl_{}.png", base_dir, quality_str), 
         data_sampler
@@ -2127,14 +2138,15 @@ fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &Res<As
         format!("{}arm_{}.png", base_dir, quality_str), 
         data_sampler
     );
+
     StandardMaterial {
         base_color_texture: Some(diff_handle),
         normal_map_texture: Some(normal_handle),
         flip_normal_map_y: true, 
         occlusion_texture: Some(arm_handle.clone()),
-        metallic_roughness_texture: Some(arm_handle),
-        anisotropy_strength: 8.0, 
-        alpha_mode: AlphaMode::Opaque,
+        metallic_roughness_texture: Some(arm_handle), 
+        perceptual_roughness: 1.0,
+        alpha_mode: bevy::prelude::AlphaMode::Opaque,
         ..Default::default()
     }
 }
