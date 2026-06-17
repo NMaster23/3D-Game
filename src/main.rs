@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use bevy::{image::ImageLoaderSettings, anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::AsBindGroup, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{image::ImageLoaderSettings, anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::AsBindGroup, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{collections::HashMap, ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -425,7 +425,7 @@ impl DerefMut for FloatingCrosshair {
 }
 
 fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>) {
-    let mut writer_spark = ExprWriter::new();
+    let writer_spark = ExprWriter::new();
     let mut gradient_spark = bevy_hanabi::Gradient::new();
     gradient_spark.add_key(0.0, Vec4::new(1.0, 0.9, 0.6, 1.0));
     gradient_spark.add_key(0.3, Vec4::new(1.0, 0.4, 0.1, 0.8));
@@ -520,7 +520,7 @@ fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<Effec
     });
 }
 
-fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapon: u32, impact_effects: Res<ImpactEffects>, mut commands: Commands, mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, time: Res<Time>, spatial_query: SpatialQuery, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>, shooter_entity: Entity) {
+fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapon: u32, impact_effects: Res<ImpactEffects>, mut commands: Commands, mut timer: ResMut<HitmarkerTimer>, mut query: Query<&mut BackgroundColor, With<Hitmarker>>, ray_pos: Vec3, ray_dir: Dir3, damage: i32, max_range: f32, spatial_query: SpatialQuery, gizmos: &mut Gizmos, mut bot_query: Query<&mut BotData>, parents: Query<&ChildOf>, shooter_entity: Entity) {
     let mut ray = Ray3d::new(ray_pos, ray_dir);
     let mut intersections = Vec::with_capacity(MAX_BOUNCES + 1);
     intersections.push((ray.origin, Color::srgb(30.0, 0.0, 0.0)));
@@ -607,7 +607,7 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
 fn update_damage_text(time: Res<Time>, camera_query: Single<(&Camera, &GlobalTransform), With<Camera3d>>, mut text_query: Query<(&mut Node, &mut DamageText)>) {
     let (camera, camera_transform) = *camera_query;
     for (mut node, mut damage) in text_query.iter_mut() {
-        let mut damage_clone = damage.clone();
+        let damage_clone = damage.clone();
         damage.world_pos += damage_clone.velocity * time.delta_secs();
         if let Ok(screen_pos) = camera.world_to_viewport(camera_transform, damage.world_pos) {
             node.left = Val::Px(screen_pos.x);
@@ -619,10 +619,7 @@ fn update_damage_text(time: Res<Time>, camera_query: Single<(&Camera, &GlobalTra
     }
 }
 
-fn botdead(mut asset_server: ResMut<AssetServer>, player_data: Query<&mut Transform, With<Player>>, mut commands: Commands, mut query: Query<(Entity, &BotData, &mut Transform), (Changed<BotData>, Without<Player>)>, mut living_bots: ResMut<LivingBots>, materials: ResMut<Assets<StandardMaterial>>, mut state: ResMut<NextState<AppState>>) {
-    let Ok(player_transform) = player_data.single() else {
-        return;
-    };
+fn botdead(mut commands: Commands, mut query: Query<(Entity, &BotData, &mut Transform), (Changed<BotData>, Without<Player>)>, mut living_bots: ResMut<LivingBots>, mut state: ResMut<NextState<AppState>>) {
     for (entity, botdata, mut transform) in query.iter_mut() {
         if botdata.health <= 0 {
             transform.rotation = Quat::from_rotation_x(90.0f32.to_radians());
@@ -644,12 +641,10 @@ fn game_over(
     asset_server: Res<AssetServer>,
     mut cursor: Single<&mut CursorOptions, With<Window>>,
     player_query: Query<&PlayerData, With<Player>>,
-    bot_query: Query<&BotData, With<Bots>>,
 ) {
     cursor.grab_mode = CursorGrabMode::None;
     cursor.visible = true;
     let player_health = player_query.single().map(|p| p.health).unwrap_or(0);
-    let bot_health: i32 = bot_query.iter().map(|b| b.health).sum();
     let result_message = if player_health > 0 {
         "Player Win!"
     } else {
@@ -767,7 +762,7 @@ fn sprint_bar(mut commands: Commands, mut materials: ResMut<Assets<SprintBarUI>>
     ));
 }
 
-fn health_bar_handling(mut commands: Commands, mut materials: ResMut<Assets<HealthBarUI>>, query: Query<&PlayerData, With<Player>>) {
+fn health_bar_handling(mut materials: ResMut<Assets<HealthBarUI>>, query: Query<&PlayerData, With<Player>>) {
     if let Ok(player) = query.single() {
         for (_, material) in materials.iter_mut() {
             let progress = (player.health as f32 / 100.0).clamp(0.0, 1.0);
@@ -788,7 +783,7 @@ fn sprint_bar_handling(mut materials: ResMut<Assets<SprintBarUI>>, query: Query<
     }
 }
 
-fn jump_indicator_handling(time: Res<Time>, mut materials: ResMut<Assets<JumpIndicator>>, query: Query<&PlayerData, With<Player>>) {
+fn jump_indicator_handling(mut materials: ResMut<Assets<JumpIndicator>>, query: Query<&PlayerData, With<Player>>) {
     if let Ok(player) = query.single() {
         for (_, material) in materials.iter_mut() {
             if player.jumps == 0 {
@@ -897,10 +892,10 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
             SceneRoot(player_model),
             Transform::from_xyz(0.0, -1.25, 0.0),
         ));
-    });;
+    });
 }
 
-fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut effects: ResMut<Assets<EffectAsset>>, bot_menu: Res<BotNumMenu>) {
+fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, bot_menu: Res<BotNumMenu>) {
     let bot_number = bot_menu.num as u32;
     let mut rng = rand::rng();
     let hits = rng.random_range(75..150);
@@ -917,7 +912,7 @@ fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes:
     commands.insert_resource(LivingBots(bot_number));
     for i in 0..bots.bot_quantity {
         bots.bot_offset = i as f32 * bots.bot_quantity as f32 - 10.0;
-        let bot = commands.spawn((
+        let _ = commands.spawn((
             GlobalTransform::default(),
             Bots,
             RigidBody::Dynamic,
@@ -946,8 +941,7 @@ fn bot_handling(
     time: Res<Time>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<ProjectileFlash>>,
-    mut spatial_query: SpatialQuery,
+    spatial_query: SpatialQuery,
     mut gizmos: Gizmos,
     mut q: Query<(Entity, &mut Transform, &mut CharacterController, &mut BotData, &mut LinearVelocity), (With<Bots>, Without<Player>)>,
     mut p: Query<(&Transform, &mut PlayerData), With<Player>>,
@@ -1033,10 +1027,6 @@ fn bot_handling(
                             gizmos.line(t.translation, hit_point, Color::srgb(1.0, 0.0, 0.0));
                             let damage = (15.0 * (1.0 - total_length / max_range)).max(1.0) as i32;
                             pd.health -= damage;
-                            let flash = materials.add(ProjectileFlash {
-                                power: 1.0,
-                                color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
-                            });
                         }
                     }
                 }
@@ -1047,12 +1037,8 @@ fn bot_handling(
 
 fn procedural_terrain_setup(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>, 
-    materials: &mut Assets<StandardMaterial>, 
+    meshes: &mut Assets<Mesh>,
     algorithm: TerrainAlgorithm,
-    terrain_detail: TerrainTextureDetail,
-    images: &mut Assets<Image>,
-    asset_server: &AssetServer,
     x: f32,
     z: f32,
     chunk_entity: Entity,
@@ -1087,7 +1073,6 @@ fn procedural_terrain_setup(
         eprintln!("Failed to generate tangents: {}", e);
     }
     let collider = build_heightfield_collider(&heightmap);
-    let scale = Vec3::new(1.0, 100.0, 1.0);
     commands.entity(chunk_entity).insert((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(material_cache.0.clone()),
@@ -1107,12 +1092,8 @@ fn procedural_terrain_setup(
 
 fn procedural_terrain(
     mut commands: Commands, 
-    mut meshes: ResMut<Assets<Mesh>>, 
-    mut materials: ResMut<Assets<StandardMaterial>>, 
+    mut meshes: ResMut<Assets<Mesh>>,
     algorithm: Res<TerrainAlgorithm>,
-    terrain_detail: Res<TerrainTextureDetail>,
-    mut images: ResMut<Assets<Image>>,
-    asset_server: Res<AssetServer>,
     player_data: Query<&mut Transform, With<Player>>,
     mut chunks: ResMut<LoadedChunks>,
     render_dist: Res<RenderDistance>,
@@ -1135,12 +1116,8 @@ fn procedural_terrain(
                 chunks.chunks.insert(chunk_pos, chunk_entity);
                 procedural_terrain_setup(
                     &mut commands, 
-                    &mut meshes, 
-                    &mut materials, 
-                    *algorithm, 
-                    *terrain_detail, 
-                    &mut images, 
-                    &asset_server,
+                    &mut meshes,
+                    *algorithm,
                     world_x, 
                     world_z,
                     chunk_entity,
@@ -1296,7 +1273,7 @@ fn movement_animations(
     }
 }
 
-fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashEffect>, mut screen_shake: ResMut<ScreenShake>, mut dash_spawners: Query<&mut EffectSpawner, With<DashThruster>>, asset_server: Res<AssetServer>, mut audio: Res<Audio>, time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<DashThruster>)>) {
+fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashEffect>, mut screen_shake: ResMut<ScreenShake>, mut dash_spawners: Query<&mut EffectSpawner, With<DashThruster>>, asset_server: Res<AssetServer>, audio: Res<Audio>, time: Res<Time>, keyboard_input: Res<ButtonInput<KeyCode>>, mut query: Query<(&Transform, &mut LinearVelocity, &mut PlayerData, &mut CharacterController), With<Player>>, mut spawners: Query<(&mut EffectSpawner, Option<&mut PointLight>), (Or<(With<BottomThrusterLeft>, With<BottomThrusterRight>)>, Without<DashThruster>)>) {
     for (transform, mut linear_velocity, mut player, mut controller) in query.iter_mut() {
         player.dash_timer.tick(time.delta());
         if player.jumps < 2 {
@@ -1343,7 +1320,7 @@ fn player_movement(mut commands: Commands, mut camera_effect: ResMut<CameraDashE
                 }
             }
         }
-        let mut velocity = (transform.rotation * move_direction).normalize_or_zero() * 5.0;
+        let velocity = (transform.rotation * move_direction).normalize_or_zero() * 5.0;
         
         let is_dashing = player.dash_timer.elapsed_secs() < 0.2;
         
@@ -1580,11 +1557,11 @@ fn setup(
     ));
 }
 
-fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>, bot_query: Query<(Entity, &BotData), Added<IsBot>>) {
+fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, player_query: Query<Entity, Added<Player>>) {
     let Ok(player) = player_query.single() else {
         return;
     };
-    let mut writer_smoke = ExprWriter::new();
+    let writer_smoke = ExprWriter::new();
     let mut color_smoke = bevy_hanabi::Gradient::new();
     color_smoke.add_key(0.0, Vec4::new(1.2, 1.6, 2.0, 0.8)); 
     color_smoke.add_key(0.2, Vec4::new(0.3, 0.3, 0.35, 0.6));
@@ -1626,7 +1603,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
                 ..Default::default()
             })
     );
-    let mut writer_flame = ExprWriter::new();
+    let writer_flame = ExprWriter::new();
     let mut color_flame = bevy_hanabi::Gradient::new();
     color_flame.add_key(0.0, Vec4::new(10.0, 10.0, 10.0, 1.0));
     color_flame.add_key(0.3, Vec4::new(0.0, 8.0, 10.0, 1.0));
@@ -1670,7 +1647,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
         )
     );
 
-    let mut writer_dash = ExprWriter::new();
+    let writer_dash = ExprWriter::new();
     let mut color_dash = bevy_hanabi::Gradient::new();
     color_dash.add_key(0.0, Vec4::new(0.0, 8.0, 10.0, 1.0)); 
     color_dash.add_key(0.2, Vec4::new(0.0, 1.0, 4.0, 0.8));
@@ -1813,7 +1790,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             })
             .update(update_accel)
     );
-    let projectile_flash = commands.spawn((
+    let _projectile_flash = commands.spawn((
         Name::new("projectile Flash"),
         ParticleEffect::new(projectile_effect_base),
         EffectSpawner::default(),
@@ -1871,7 +1848,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             })
             .update(update_accel)
     );
-    let projectile_effect_2 = commands.spawn((
+    let _projectile_effect_2 = commands.spawn((
         Name::new("projectile Effect 2"),
         ParticleEffect::new(projectile_effect_2_base),
         EffectSpawner::default(),
@@ -1933,7 +1910,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             })
             .update(update_accel)
     );
-    let projectile_effect_3 = commands.spawn((
+    let _projectile_effect_3 = commands.spawn((
         Name::new("projectile Effect 3"),
         ParticleEffect::new(projectile_effect_3_base),
         EffectSpawner::default(),
@@ -2138,7 +2115,7 @@ fn shooting(
         dir_vec.z += rand::rng().random_range(-total_spread..total_spread);
     }
     let dir = Dir3::new(dir_vec).unwrap_or(camera_ray.direction);
-    ray_handling(audio, asset_server, current_weapon, impact_effects, commands, timer, q, ray_pos, dir, damage, max_range, time, spatial_query, &mut gizmos, query, parent, shooter_entity);
+    ray_handling(audio, asset_server, current_weapon, impact_effects, commands, timer, q, ray_pos, dir, damage, max_range, spatial_query, &mut gizmos, query, parent, shooter_entity);
     for (mut spawner, mut transform, projectile) in shooting_effects.iter_mut() {
         if projectile.0 == current_weapon {
             transform.translation = ray_pos;
@@ -2454,7 +2431,7 @@ fn settings_menu(
     }
 }
 
-fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, terrain_menu: Res<TerrainMenu>, mut terrain_detail: ResMut<TerrainTextureDetail>, mut player_model: ResMut<PlayerModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
+fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, terrain_menu: Res<TerrainMenu>, mut terrain_detail: ResMut<TerrainTextureDetail>, mut player_model: ResMut<PlayerModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands) {
     for interaction in query.iter() {
         if *interaction == Interaction::Pressed {
             terrain_detail.enabled = terrain_menu.index as i32;
@@ -2498,7 +2475,6 @@ fn main_menu_handling(mut commands: Commands, query: Query<Entity, With<MainMenu
 }
 
 fn load_to_ground(
-    query: Query<&CollidingEntities, With<Player>>,
     terrain_query: Query<(), With<TerrainCollider>>,
     loading_screen: Query<Entity, With<LoadingScreenImage>>,
     mut app_state: ResMut<NextState<AppState>>,
