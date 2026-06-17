@@ -217,6 +217,21 @@ struct CrosshairSpread {
 }
 
 #[derive(Resource)]
+struct AdsState {
+    pub is_ads: bool,
+    pub multiplier: f32,
+}
+
+impl Default for AdsState {
+    fn default() -> Self {
+        Self {
+            is_ads: false,
+            multiplier: 1.0,
+        }
+    }
+}
+
+#[derive(Resource)]
 struct ImpactEffects {
     spark_effect: Handle<EffectAsset>,
     arc_effect: Handle<EffectAsset>,
@@ -391,7 +406,7 @@ impl UiMaterial for WeaponSelectorUI {
 impl Default for BotConfig {
     fn default() -> Self {
         Self {
-            accuracy_range: 1..5,
+            accuracy_range: 1..25,
             disruptor_timer: Timer::from_seconds(5.0, TimerMode::Once),
             is_disrupted: false,
         }
@@ -631,9 +646,23 @@ fn botdead(mut asset_server: ResMut<AssetServer>, player_data: Query<&mut Transf
     }
 }
 
-fn game_over(mut commands: Commands, asset_server: Res<AssetServer>, mut cursor: Single<&mut CursorOptions, With<Window>>) {
+fn game_over(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut cursor: Single<&mut CursorOptions, With<Window>>,
+    player_query: Query<&PlayerData, With<Player>>,
+    bot_query: Query<&BotData, With<Bots>>,
+) {
     cursor.grab_mode = CursorGrabMode::None;
     cursor.visible = true;
+    let player_health = player_query.single().map(|p| p.health).unwrap_or(0);
+    let bot_health: i32 = bot_query.iter().map(|b| b.health).sum();
+    let result_message = if player_health > 0 {
+        "Player Win!"
+    } else {
+        "Player Loss"
+    };
+    println!("{} Player Health: {}, Remaining Bot Health: {}", result_message, player_health, bot_health);
     commands.spawn((
         Node {
             width: Val::Percent(100.0),
@@ -651,6 +680,7 @@ fn game_over(mut commands: Commands, asset_server: Res<AssetServer>, mut cursor:
                     height: Val::Percent(100.0),
                     ..default()
                 }, Name::new("game_menu"), children![
+                (Text::new(result_message.to_string()), Node::default()),
                 (Button, RestartButton, Node::default(), children![(Text::new("Play Again"), Node::default())]),
                 (Node::default(), Name::new("floating_borders"))
             ]),
@@ -855,19 +885,18 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
         GlobalTransform::default(),
         Player,
         RigidBody::Dynamic,
-        SceneRoot(player_model),
-        Collider::capsule(1.0, 0.5),
+        Collider::capsule(1.0, 1.5),
         Transform::from_xyz(0.0, 160.0, 0.0),
         PlayerData {
             health: 100,
             player_name: "None".into(),
             player_id: 1,
             jumps: 2,
-            jump_timer: Timer::from_seconds(1.0, TimerMode::Once),
+            jump_timer: Timer::from_seconds(2.5, TimerMode::Once),
             footstep_timer: Timer::from_seconds(0.7, TimerMode::Repeating),
             dash_timer: {
-                let mut timer = Timer::from_seconds(2.0, TimerMode::Once);
-                timer.set_elapsed(Duration::from_secs(2));
+                let mut timer = Timer::from_seconds(5.0, TimerMode::Once);
+                timer.set_elapsed(Duration::from_secs(5));
                 timer
             },
         },
@@ -875,14 +904,19 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, mut grap
             move_direction: Vec3::ZERO,
         },
         LockedAxes::ROTATION_LOCKED
-    ));
+    )).with_children(|parent| {
+        parent.spawn((
+            SceneRoot(player_model),
+            Transform::from_xyz(0.0, -1.25, 0.0),
+        ));
+    });;
 }
 
 fn bot_spawn(mut commands: Commands, asset_server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut effects: ResMut<Assets<EffectAsset>>, bot_menu: Res<BotNumMenu>) {
     let bot_number = bot_menu.num as u32;
     let mut rng = rand::rng();
     let hits = rng.random_range(75..150);
-    let hits_num = rng.random_range(1..5);
+    let hits_num = rng.random_range(1..25);
     let mut bots = BotData {
         health: hits,
         bot_id: 1,
@@ -1460,7 +1494,6 @@ fn setup(
             constant_object_thickness: 0.2,
             ..default()
         })
-        .insert(ScreenSpaceReflections::default())
         .insert(MotionBlur {
             shutter_angle: 0.5,
             samples: 4,
@@ -1472,6 +1505,9 @@ fn setup(
             aperture_f_stops: 2.8,
             max_circle_of_confusion_diameter: 64.0,
             max_depth: 1000.0,
+        })
+        .insert(Exposure {
+            ev100: 15.0,
         });
     }
     commands.spawn(Node {
@@ -1486,6 +1522,8 @@ fn setup(
         DirectionalLight {
             illuminance: 100_000.0,
             shadows_enabled: true,
+            shadow_depth_bias: 0.1,
+            shadow_normal_bias: 0.6,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -PI / 4.0, PI / 2.0, 0.0)),
@@ -1554,7 +1592,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     color_flame.add_key(1.0, Vec4::new(0.0, 0.2, 0.8, 0.0));
 
     let mut size_flame = bevy_hanabi::Gradient::new();
-    size_flame.add_key(0.0, Vec3::splat(0.4));
+    size_flame.add_key(0.0, Vec3::new(0.1, 0.8, 0.1));
     size_flame.add_key(1.0, Vec3::splat(0.0));
 
     let flame_pos_center = writer_flame.lit(Vec3::ZERO).expr();
@@ -1578,6 +1616,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
                 speed: flame_vel_speed,
             })
             .init(SetAttributeModifier::new(Attribute::LIFETIME, flame_lifetime))
+        .render(OrientModifier::new(OrientMode::AlongVelocity))
             .render(ColorOverLifetimeModifier {
                 gradient: color_flame,
                 ..Default::default()
@@ -1597,7 +1636,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     color_dash.add_key(1.0, Vec4::new(0.05, 0.05, 0.05, 0.0));
 
     let mut size_dash = bevy_hanabi::Gradient::new();
-    size_dash.add_key(0.0, Vec3::splat(0.8));
+    size_dash.add_key(0.0, Vec3::new(0.2, 2.0, 0.2));
     size_dash.add_key(1.0, Vec3::splat(0.0));
 
     let dash_pos_center = writer_dash.lit(Vec3::ZERO).expr();
@@ -1623,6 +1662,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
             })
             .init(SetAttributeModifier::new(Attribute::LIFETIME, dash_lifetime))
             .update(LinearDragModifier::new(dash_drag))
+        .render(OrientModifier::new(OrientMode::AlongVelocity))
             .render(ColorOverLifetimeModifier {
                 gradient: color_dash,
                 ..Default::default()
@@ -1865,7 +1905,7 @@ fn particle_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
     )).id();
 }
 
-fn camera_effects(mut dash_camera_query: Query<&mut Projection, With<Camera3d>>, mut dash_effect_camera: ResMut<CameraDashEffect>, aim_distance: Res<AimDistance>, mut camera_dof_query: Query<&mut DepthOfField>, mut camera: Query<&mut Transform, With<Camera>>, mut timer: Local<f32>, player_q: Query<&LinearVelocity, With<Player>>, time: Res<Time>, mut shake: ResMut<ScreenShake>) {
+fn camera_effects(mut dash_camera_query: Query<&mut Projection, With<Camera3d>>, mut dash_effect_camera: ResMut<CameraDashEffect>, aim_distance: Res<AimDistance>, mut camera_dof_query: Query<&mut DepthOfField>, mut camera: Query<&mut Transform, With<Camera>>, mut timer: Local<f32>, player_q: Query<&LinearVelocity, With<Player>>, time: Res<Time>, mut shake: ResMut<ScreenShake>, ads_state: Res<AdsState>) {
     let Ok(mut camera_transform) = camera.single_mut() else {
         return;
     };
@@ -1899,7 +1939,7 @@ fn camera_effects(mut dash_camera_query: Query<&mut Projection, With<Camera3d>>,
     dash_effect_camera.active_multiplier += (1.0 - dash_effect_camera.active_multiplier) * time.delta_secs() * 10.0;
     if let Projection::Perspective(ref mut perspective) = *projection {
         let base_fov = 90.0_f32.to_radians();
-        perspective.fov = base_fov * dash_effect_camera.active_multiplier;
+        perspective.fov = base_fov * dash_effect_camera.active_multiplier * ads_state.multiplier;
     }
 }
 
@@ -1934,11 +1974,12 @@ fn shooting(
         Res<ButtonInput<MouseButton>>,
         ResMut<AimDistance>,
     ),
-    (mut shake, mut crosshair_spread, mut crosshair, window): (
+    (mut shake, mut crosshair_spread, mut crosshair, window, ads_state): (
         ResMut<ScreenShake>,
         ResMut<CrosshairSpread>,
         ResMut<FloatingCrosshair>,
         Single<&Window>,
+        Res<AdsState>,
     ),
     mut commands: Commands,
     mut shooting_effects: Query<(&mut EffectSpawner, &mut Transform, &ProjectileFlashEffect), (Without<Player>, Without<Camera3d>)>,
@@ -2044,7 +2085,10 @@ fn shooting(
         DespawnTimer(Timer::from_seconds(0.05, TimerMode::Once)),
     ));
     crosshair.y -= 200.0;
-    let total_spread = base_spread + (crosshair_spread.spread * 0.2);
+    let mut total_spread = base_spread + (crosshair_spread.spread * 0.2);
+    if ads_state.is_ads {
+        total_spread *= 0.25; // Drastically reduce weapon spread while aiming
+    }
     let mut dir_vec = (target - ray_pos).normalize_or_zero();
     if dir_vec == Vec3::ZERO { dir_vec = *camera_ray.direction; }
     if total_spread > 0.0 {
@@ -2458,18 +2502,21 @@ fn despawn_in_game_ui(mut commands: Commands, query: Query<Entity, With<InGameUi
     }
 }
 
+fn weapon_ads(mouse: Res<ButtonInput<MouseButton>>, mut ads_state: ResMut<AdsState>, time: Res<Time>) {
+    ads_state.is_ads = mouse.pressed(MouseButton::Right);
+    let target_multiplier = if ads_state.is_ads { 0.5 } else { 1.0 };
+    ads_state.multiplier += (target_multiplier - ads_state.multiplier) * time.delta_secs() * 15.0;
+}
+
 fn main() {
     App::new()
-        .add_plugins(EmbeddedAssetPlugin {
-            mode: bevy_embedded_assets::PluginMode::ReplaceDefault,
-        })
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Mech Game".into(),
                         resolution: WindowResolution::new(1920, 1080),
-                        present_mode: bevy::window::PresentMode::AutoVsync,
+                        present_mode: bevy::window::PresentMode::Fifo,
                         ..default()
                     }),
                     ..default()
@@ -2506,6 +2553,7 @@ fn main() {
         .init_resource::<BotConfig>()
         .init_resource::<AimDistance>()
         .init_resource::<LoadedChunks>()
+        .init_resource::<AdsState>()
         .insert_resource(RenderDistance { num: 1 })
         .insert_resource(CrosshairSpread { spread: 0.0 })
         .insert_resource(ScreenShake { strength: 0.0 })
@@ -2530,7 +2578,7 @@ fn main() {
         })
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
-            brightness: 100.0,
+            brightness: 3500.0,
             ..default()
         })
         .insert_resource(Seed(rand::rng().random_range(1..2147483647)))
@@ -2576,6 +2624,7 @@ fn main() {
                 player_death,
                 botdead,
                 particle_effects,
+                weapon_ads,
                 bevy_symbios_ground::sync_splat_texture.run_if(resource_exists::<SplatTexture>),
             ).run_if(in_state(AppState::InGame)),
         )

@@ -20,10 +20,6 @@ log = { version = "0.4.32", features = ["max_level_debug", "release_max_level_wa
 noise = "0.9.0"
 rand = "0.10.1"
 
-[target.x86_64-pc-windows-msvc]
-linker = "rust-lld.exe"
-rustflags = ["-Zshare-generics=y"]
-
 [profile.dev]
 opt-level = 1
 
