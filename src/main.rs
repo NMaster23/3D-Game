@@ -1,8 +1,9 @@
-use bevy::{render::render_resource::TextureFormat, image::ImageLoaderSettings, anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog, VolumetricLight}, math::VectorSpace, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::AsBindGroup, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use bevy::{image::ImageLoaderSettings, anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::AsBindGroup, settings::{RenderCreation, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{collections::HashMap, ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
-use bevy_embedded_assets::EmbeddedAssetPlugin;
 use std::f32::consts::PI;
 use bevy_hanabi::prelude::*;
 use bevy_flair::prelude::*;
@@ -19,6 +20,9 @@ use bevy_symbios_texture::{
 };
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::asset::RenderAssetUsages;
+use bevy::log::{Level, LogPlugin};
+
+const MAX_BOUNCES: usize = 2;
 
 #[derive(Component)]
 pub struct Lighting;
@@ -428,8 +432,6 @@ impl DerefMut for FloatingCrosshair {
     fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
 }
 
-const MAX_BOUNCES: usize = 2;
-
 fn setup_impact_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>) {
     let mut writer_spark = ExprWriter::new();
     let mut gradient_spark = bevy_hanabi::Gradient::new();
@@ -587,7 +589,6 @@ fn ray_handling(audio: Res<Audio>, asset_server: Res<AssetServer>, current_weapo
                         DespawnTimer(Timer::from_seconds(5.0, TimerMode::Once)),
                     ));
                 }
-                println!("Bot hit! Damage: {}, Distance: {:.2}", final_damage, total_length);
                 for mut color in &mut query {
                     color.0 = Color::srgba(1.0, 1.0, 1.0, 0.75);
                 }
@@ -662,7 +663,6 @@ fn game_over(
     } else {
         "Player Loss"
     };
-    println!("{} Player Health: {}, Remaining Bot Health: {}", result_message, player_health, bot_health);
     commands.spawn((
         Node {
             width: Val::Percent(100.0),
@@ -839,19 +839,15 @@ fn weapon_selector(keycode: Res<ButtonInput<KeyCode>>, mut selected_weapon: ResM
     let mut selection = None;
     if keycode.just_pressed(KeyCode::Digit1) {
         selection = Some(1);
-        println!("Selected weapon: 1");
     }
     if keycode.just_pressed(KeyCode::Digit2) {
         selection = Some(2);
-        println!("Selected weapon: 2");
     }
     if keycode.just_pressed(KeyCode::Digit3) {
         selection = Some(3);
-        println!("Selected weapon: 3");
     }
     if let Some(id) = selection {
         selected_weapon.id = id;
-        println!("Selected weapon: {}", id);
     }
     if selected_weapon.is_changed() {
         for (_, material) in materials.iter_mut() {
@@ -1045,7 +1041,6 @@ fn bot_handling(
                             gizmos.line(t.translation, hit_point, Color::srgb(1.0, 0.0, 0.0));
                             let damage = (15.0 * (1.0 - total_length / max_range)).max(1.0) as i32;
                             pd.health -= damage;
-                            println!("Player hit! Health: {}, Distance: {:.2}", pd.health, hit_data.distance);
                             let flash = materials.add(ProjectileFlash {
                                 power: 1.0,
                                 color: LinearRgba::new(1.0, 0.8, 0.5, 1.0),
@@ -1097,7 +1092,7 @@ fn procedural_terrain_setup(
         .with_uv_tile_size(32.0)
         .build(&heightmap);
     if let Err(e) = mesh.generate_tangents() {
-        println!("Failed to generate tangents: {}", e);
+        eprintln!("Failed to generate tangents: {}", e);
     }
     let collider = build_heightfield_collider(&heightmap);
     let scale = Vec3::new(1.0, 100.0, 1.0);
@@ -1183,18 +1178,60 @@ fn despawn_ray(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &m
     }
 }
 
-fn targeting_disruptor(keycode: Res<ButtonInput<KeyCode>>, mut bot_config: ResMut<BotConfig>, time: Res<Time>) {
+fn targeting_disruptor(keycode: Res<ButtonInput<KeyCode>>, mut bot_config: ResMut<BotConfig>, time: Res<Time>, mut commands: Commands) {
     if bot_config.is_disrupted {
         if bot_config.disruptor_timer.tick(time.delta()).just_finished() {
             bot_config.is_disrupted = false;
             bot_config.accuracy_range = 1..15;
-            println!("Targeting systems restored.");
+            commands.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::FlexStart,
+                    padding: UiRect::top(Val::Px(100.0)),
+                    ..default()
+                },
+                ZIndex(100),
+                DespawnTimer(Timer::from_seconds(5.0, TimerMode::Once)),
+            )).with_children(|parent| {
+                parent.spawn((
+                    Text::new("Bot Targeting System Working"),
+                    TextColor(Color::srgb(1.0, 0.2, 0.2)),
+                    TextFont {
+                        font_size: 48.0,
+                        ..default()
+                    },
+                ));
+            });
         }
     } else if keycode.just_pressed(KeyCode::KeyT) {
         bot_config.is_disrupted = true;
         bot_config.disruptor_timer.reset();
         bot_config.accuracy_range = 1..100;
-        println!("Targeting systems disrupted!");
+        commands.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::FlexStart,
+                padding: UiRect::top(Val::Px(100.0)),
+                ..default()
+            },
+            ZIndex(100),
+            DespawnTimer(Timer::from_seconds(5.0, TimerMode::Once)),
+        )).with_children(|parent| {
+            parent.spawn((
+                Text::new("Targeting Disrupted"),
+                TextColor(Color::srgb(1.0, 0.2, 0.2)),
+                TextFont {
+                    font_size: 48.0,
+                    ..default()
+                },
+            ));
+        });
     }
 }
 
@@ -1420,6 +1457,7 @@ fn setup(
     asset_server: Res<AssetServer>,
     terrain_detail: Res<TerrainTextureDetail>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    render_dist: Res<RenderDistance>,
 ) {
     let material = terrain_detail_setup(terrain_detail.enabled, terrain_detail.quality, &asset_server);
     commands.insert_resource(TerrainMaterial(materials.add(material)));
@@ -1459,13 +1497,6 @@ fn setup(
         MotionVectorPrepass,
     ));
     camera.insert((
-        VolumetricFog {
-        ambient_color: Color::srgb(0.1, 0.1, 0.12),
-        ambient_intensity: 0.1,
-        step_count: 64,
-        jitter: 0.5,
-        ..default()
-        },
         Skybox {
         image: sky.clone(),
             brightness: skybox_brightness,
@@ -1489,6 +1520,9 @@ fn setup(
         },
     ));
     if graphics.enabled {
+        let fog_end = render_dist.num as f32 * 256.0;
+        let fog_start = (fog_end - 256.0).max(0.0);
+
         camera.insert(ScreenSpaceAmbientOcclusion {
             quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Ultra,
             constant_object_thickness: 0.2,
@@ -1508,6 +1542,21 @@ fn setup(
         })
         .insert(Exposure {
             ev100: 15.0,
+        })
+        .insert(DistanceFog {
+            color: Color::srgb(0.6, 0.7, 0.8),
+            falloff: FogFalloff::Linear {
+                start: fog_start,
+                end: fog_end,
+            },
+            ..default()
+        })
+        .insert(VolumetricFog {
+            ambient_color: Color::srgb(0.1, 0.1, 0.12),
+            ambient_intensity: 0.1,
+            step_count: 64,
+            jitter: 0.5,
+            ..default()
         });
     }
     commands.spawn(Node {
@@ -2087,7 +2136,7 @@ fn shooting(
     crosshair.y -= 200.0;
     let mut total_spread = base_spread + (crosshair_spread.spread * 0.2);
     if ads_state.is_ads {
-        total_spread *= 0.25; // Drastically reduce weapon spread while aiming
+        total_spread *= 0.25;
     }
     let mut dir_vec = (target - ray_pos).normalize_or_zero();
     if dir_vec == Vec3::ZERO { dir_vec = *camera_ray.direction; }
@@ -2138,7 +2187,7 @@ fn terrain_detail_setup(terrain_type: i32, quality: usize, asset_server: &Res<As
     let base_dir = match terrain_type {
         0 => format!("Environment/{}/CliffSide/textures/cliff_side_", quality_dir),
         1 => format!("Environment/{}/RockyTerrain/textures/rocky_terrain_", quality_dir),
-        2 => format!("Environment/{}/Snow/textures/snow_01_", quality_dir),
+        2 => format!("Environment/{}/Snow/textures/asphalt_snow_", quality_dir),
         _ => format!("Environment/{}/CliffSide/textures/cliff_side_", quality_dir),
     };
     let color_sampler = |settings: &mut ImageLoaderSettings| {
@@ -2378,7 +2427,6 @@ fn settings_menu(
     
     for interaction in q_settings.iter() {
         if *interaction == Interaction::Pressed {
-            println!("Settings button clicked!");
             for entity in q_main_menu.iter() {
                 commands.entity(entity).despawn();
             }
@@ -2417,7 +2465,6 @@ fn settings_menu(
 fn settings_apply(mut state: ResMut<NextState<AppState>>, mut algorithm: ResMut<TerrainAlgorithm>, q_main_menu: Query<Entity, With<MainMenuUi>>, query: Query<&Interaction, (Changed<Interaction>, With<ApplySettingsButton>)>, menu: Res<CycleMenu>, terrain_menu: Res<TerrainMenu>, mut terrain_detail: ResMut<TerrainTextureDetail>, mut player_model: ResMut<PlayerModel>, mut graphics: ResMut<SsaoEnabled>, mut commands: Commands, asset_server: Res<AssetServer>) {
     for interaction in query.iter() {
         if *interaction == Interaction::Pressed {
-            println!("Settings applied!");
             terrain_detail.enabled = terrain_menu.index as i32;
             terrain_detail.quality = menu.index;
             match menu.index {
@@ -2492,7 +2539,6 @@ fn load_to_ground(
         app_state.set(AppState::InGame);
         *spawned = false;
         *timer = 0.0;
-        println!("Loading finished!");
     }
 }
 
@@ -2530,6 +2576,10 @@ fn main() {
                         },
                         ..default()
                     }),
+                    ..default()
+                })
+                .set(LogPlugin {
+                    level: Level::WARN,
                     ..default()
                 })
                 .disable::<bevy::audio::AudioPlugin>(),
