@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use bevy::{image::ImageLoaderSettings, anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::TemporalJitter, render_resource::AsBindGroup, settings::{RenderCreation, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
+use bevy::{image::ImageLoaderSettings, anti_alias::taa::TemporalAntiAliasing, camera::Exposure, color::palettes::css, core_pipeline::{Skybox, prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass}, tonemapping::Tonemapping}, input::mouse::AccumulatedMouseMotion, light::{CascadeShadowConfigBuilder, VolumetricFog}, pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel}, post_process::{bloom::Bloom, dof::{DepthOfField, DepthOfFieldMode}, motion_blur::MotionBlur}, prelude::*, render::{RenderPlugin, camera::{self, TemporalJitter}, render_resource::AsBindGroup, settings::{RenderCreation, WgpuLimits, WgpuSettings}, view::Hdr}, ui::RelativeCursorPosition, window::{CursorGrabMode, CursorOptions, WindowResolution}};
 use avian3d::prelude::*;
 use std::{collections::HashMap, ops::{Deref, DerefMut}, time::Duration};
 use rand::prelude::*;
@@ -8,16 +8,8 @@ use std::f32::consts::PI;
 use bevy_hanabi::prelude::*;
 use bevy_flair::prelude::*;
 use bevy_kira_audio::prelude::*;
-use bevy_symbios_ground::{
-    FbmNoise, GroundMaterialSettings, HeightMap, HeightMapMeshBuilder, NormalMethod, TerrainGenerator, build_heightfield_collider, splat_to_image, SplatMapper, SplatTexture,
-};
+use bevy_symbios_ground::{HeightMap, HeightMapMeshBuilder, NormalMethod, build_heightfield_collider, SplatTexture};
 use noise::{NoiseFn, Fbm, SuperSimplex};
-use bevy_symbios_texture::{
-    generator::{TextureGenerator, map_to_images},
-    ground::{GroundConfig, GroundGenerator},
-    rock::{RockConfig, RockGenerator},
-    snow::{SnowConfig, SnowGenerator},
-};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::asset::RenderAssetUsages;
 use bevy::log::{Level, LogPlugin};
