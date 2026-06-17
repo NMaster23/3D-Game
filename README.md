@@ -13,6 +13,6 @@ Cliff Side Texture: https://polyhaven.com/a/cliff_side
 
 Asphalt Snow Texture: https://polyhaven.com/a/asphalt_snow
 
-AI Use:
+## AI Use:
 
 I used GitHub Copilot for some autocomplete and some AI-generated functions that I think were replaced. All the AI I used is listed in the GitHub commits. I also used it to generate all of the size keys. AI Guidance means that I used it to do one of these. Generate examples if there were bad docs, or do all of the research for me and compile it into a list of links.
