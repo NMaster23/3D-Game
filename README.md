@@ -6,7 +6,7 @@ All assets for the source code will be linked, but they will be included in the 
 You can try your luck by replacing the textures in the assets but they are not guaranteed to work.
 
 ## Setup Instructions
-The .zip can be extracted to anywhere but all of the contents must stay in the same directory. This is so the .exe can access all of the assets from the assets folder. Like in the zip there is an assets folder and a .exe folder. Both the assets and .exe need to be in the same directory.
+First go to the releases section of this repository and download the .zip. The .zip can be extracted to anywhere but all of the contents must stay in the same directory. This is so the .exe can access all of the assets from the assets folder. In the zip there is an assets folder and a .exe folder. Both the assets and .exe need to be in the same directory. Then you run the .exe and play the game.
 
 ## Links:
 
